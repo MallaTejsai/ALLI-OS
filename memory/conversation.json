@@ -1,0 +1,1002 @@
+[
+    {
+        "role": "user",
+        "content": "my name is tejsai"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tejsai."
+    },
+    {
+        "role": "user",
+        "content": "my nickname is binnu"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what is my nick name"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tejsai."
+    },
+    {
+        "role": "user",
+        "content": "what is my nickname"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what should you call me"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "my goal is to become a software engineer"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a software engineer."
+    },
+    {
+        "role": "user",
+        "content": "i also want to become a content creator"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a content creator and become a software engineer."
+    },
+    {
+        "role": "user",
+        "content": "what are my dreams"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a content creator and become a software engineer."
+    },
+    {
+        "role": "user",
+        "content": "what is my aim"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a software engineer and become a content creator."
+    },
+    {
+        "role": "user",
+        "content": "i am learning"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your learning goals."
+    },
+    {
+        "role": "user",
+        "content": "i am learning c program"
+    },
+    {
+        "role": "assistant",
+        "content": "Got it — I'll remember that: User is learning c program"
+    },
+    {
+        "role": "user",
+        "content": "i know python"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "what am i learning"
+    },
+    {
+        "role": "assistant",
+        "content": "You want to learn c program."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "i don't like c program"
+    },
+    {
+        "role": "assistant",
+        "content": "You dislike c."
+    },
+    {
+        "role": "user",
+        "content": "i like c programming"
+    },
+    {
+        "role": "assistant",
+        "content": "You want to learn c program."
+    },
+    {
+        "role": "user",
+        "content": "i like java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java and c."
+    },
+    {
+        "role": "user",
+        "content": "i don't like c"
+    },
+    {
+        "role": "assistant",
+        "content": "You like c."
+    },
+    {
+        "role": "user",
+        "content": "i don't like c program"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java. You dislike c."
+    },
+    {
+        "role": "user",
+        "content": "what do i want to become in the future"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a software engineer and become a content creator."
+    },
+    {
+        "role": "user",
+        "content": "what is my favorite food"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't have your favorite food stored yet."
+    },
+    {
+        "role": "user",
+        "content": "what is my name"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tejsai."
+    },
+    {
+        "role": "user",
+        "content": "what is my nickname"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills and goals"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a content creator and become a software engineer."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "my name is tejsai"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tejsai."
+    },
+    {
+        "role": "user",
+        "content": "my nick name is binnu"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what is nick name"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what is nickname"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "what are my goals and skills"
+    },
+    {
+        "role": "assistant",
+        "content": "Goals:\n- become a software engineer\n- become a content creator\n\nSkills:\n- python"
+    },
+    {
+        "role": "user",
+        "content": "what are my dreams"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a content creator and become a software engineer."
+    },
+    {
+        "role": "user",
+        "content": "what i am learning"
+    },
+    {
+        "role": "assistant",
+        "content": "You want to learn c program."
+    },
+    {
+        "role": "user",
+        "content": "i like c"
+    },
+    {
+        "role": "assistant",
+        "content": "You like c and java."
+    },
+    {
+        "role": "user",
+        "content": "i don't like c"
+    },
+    {
+        "role": "assistant",
+        "content": "You dislike c."
+    },
+    {
+        "role": "user",
+        "content": "i am intrested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Skills:\n- python\n\nGoals:\n- become a software engineer\n- become a content creator\n\nProjects:\n- I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "i am interested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "i am interest in learning in editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Learning:\n- c program\n\nInterests:\n- web development and editing"
+    },
+    {
+        "role": "user",
+        "content": "what are skills , goals, and intrests"
+    },
+    {
+        "role": "assistant",
+        "content": "Goals:\n- become a content creator\n- become a software engineer\n\nSkills:\n- python"
+    },
+    {
+        "role": "user",
+        "content": "i am interested in flutter also"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in flutter also and web development and editing."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills , goals and interests and my name give my brief introduction"
+    },
+    {
+        "role": "assistant",
+        "content": "Name:\n- Your name is Tejsai.\n\nGoals:\n- become a content creator\n- become a software engineer\n\nSkills:\n- python\n\nInterests:\n- web development and editing\n- flutter also"
+    },
+    {
+        "role": "user",
+        "content": "my name is tej"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tej."
+    },
+    {
+        "role": "user",
+        "content": "my goal changed, now I want to become a researcher"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a researcher, become a software engineer, and become a content creator."
+    },
+    {
+        "role": "user",
+        "content": "i don't want to become software engineer and content creator"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a software engineer, become a content creator, and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what are my goals"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a researcher, become a software engineer, and become a content creator."
+    },
+    {
+        "role": "user",
+        "content": "i don't want to become software engineer and content creator"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "ok what are my skills and interests"
+    },
+    {
+        "role": "assistant",
+        "content": "Skills:\n- python\n\nInterests:\n- web development and editing\n- flutter also"
+    },
+    {
+        "role": "user",
+        "content": "i don't want to learn python and also i don't intrested in web developement and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your learning goals."
+    },
+    {
+        "role": "user",
+        "content": "i don't intrested in web developement and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "i don't have  intrested in web developement and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "what are my intrests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in web development and editing and flutter also."
+    },
+    {
+        "role": "user",
+        "content": "i don't have  intrested in web developement and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "I don't interested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nGoals:\n- I don't currently have any stored information about your goals."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I don't intrested in web developement"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nSkills:\n- I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "I don't interested in web development and editing"
+    },
+    {
+        "role": "assistant",
+        "content": "Projects:\n- I don't currently have any stored information about your projects.\n\nGoals:\n- I don't currently have any stored information about your goals."
+    },
+    {
+        "role": "user",
+        "content": "what are my goals"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what are my intrests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in flutter also."
+    },
+    {
+        "role": "user",
+        "content": "i am intrested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "what are my intrests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in web development and flutter also."
+    },
+    {
+        "role": "user",
+        "content": "i don't have intrests in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "i don't have intrests in web development any more"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "i don't have interests in web development any more"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in web development and flutter also."
+    },
+    {
+        "role": "user",
+        "content": "I am not interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "i am intrested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I am not interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I don't intrested in web developement"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "what are my intrests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in flutter also."
+    },
+    {
+        "role": "user",
+        "content": "I don't intrested in flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "Okay."
+    },
+    {
+        "role": "user",
+        "content": "what are my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your interests."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter."
+    },
+    {
+        "role": "user",
+        "content": "what are my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter."
+    },
+    {
+        "role": "user",
+        "content": "what is my name"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is tej."
+    },
+    {
+        "role": "user",
+        "content": "what is my nickname"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "how should you call me"
+    },
+    {
+        "role": "assistant",
+        "content": "Your nickname is binnu."
+    },
+    {
+        "role": "user",
+        "content": "give me a short introduction about myself"
+    },
+    {
+        "role": "assistant",
+        "content": "Here is what I currently have stored about you:\n- User wants to become a researcher"
+    },
+    {
+        "role": "user",
+        "content": "what do I want to become"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what are my dreams"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what is my aim in life"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "I also want to become an AI researcher"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goal is to become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "I also want to become an AI engineer"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become an AI engineer and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what are my goals"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become an AI engineer and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what skills do I have"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "what am I learning"
+    },
+    {
+        "role": "assistant",
+        "content": "You are learning c program."
+    },
+    {
+        "role": "user",
+        "content": "what can I do"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your preferences."
+    },
+    {
+        "role": "user",
+        "content": "what should I learn"
+    },
+    {
+        "role": "assistant",
+        "content": "You are learning c program."
+    },
+    {
+        "role": "user",
+        "content": "what am I interested in"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter."
+    },
+    {
+        "role": "user",
+        "content": "what topics do I like"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter."
+    },
+    {
+        "role": "user",
+        "content": "tell me about my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in artificial intelligence,I am interested in web development,I am interested in video editing"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your skills."
+    },
+    {
+        "role": "user",
+        "content": "what are my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in I am interested in web development, I am interested in video editing, artificial intelligence, and Flutter."
+    },
+    {
+        "role": "user",
+        "content": "I am no longer interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "what are my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in I am interested in video editing, artificial intelligence, and Flutter."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I don't want web development anymore"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I'm not interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I stopped being interested in web development"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your projects."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter, I am interested in video editing, and artificial intelligence."
+    },
+    {
+        "role": "user",
+        "content": "I don't intrested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "Okay."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter, I am interested in video editing, and artificial intelligence."
+    },
+    {
+        "role": "user",
+        "content": "I am interested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in Flutter, I am interested in video editing, and artificial intelligence."
+    },
+    {
+        "role": "user",
+        "content": "I'm not intrested in Flutter anymore"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in I am interested in video editing and artificial intelligence."
+    },
+    {
+        "role": "user",
+        "content": "I am no longer interested in Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "Okay."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "what are my goals"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become an AI engineer and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what are my interests"
+    },
+    {
+        "role": "assistant",
+        "content": "You are interested in I am interested in video editing and artificial intelligence."
+    },
+    {
+        "role": "user",
+        "content": "I know Python"
+    },
+    {
+        "role": "assistant",
+        "content": "You are learning c program."
+    },
+    {
+        "role": "user",
+        "content": "I am learning C"
+    },
+    {
+        "role": "assistant",
+        "content": "You are learning c program."
+    },
+    {
+        "role": "user",
+        "content": "I don't want to learn C anymore"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your learning goals."
+    },
+    {
+        "role": "user",
+        "content": "what are my skills"
+    },
+    {
+        "role": "assistant",
+        "content": "Your skill is python."
+    },
+    {
+        "role": "user",
+        "content": "what am I learning"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't currently have any stored information about your learning goals."
+    },
+    {
+        "role": "user",
+        "content": "I like Flutter"
+    },
+    {
+        "role": "assistant",
+        "content": "You like flutter."
+    },
+    {
+        "role": "user",
+        "content": "I like Java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java and flutter. You dislike c."
+    },
+    {
+        "role": "user",
+        "content": "I don't like Java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java."
+    },
+    {
+        "role": "user",
+        "content": "I don't like Java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java."
+    },
+    {
+        "role": "user",
+        "content": "I do  like Java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java. You dislike c."
+    },
+    {
+        "role": "user",
+        "content": "I do not  like Java"
+    },
+    {
+        "role": "assistant",
+        "content": "You like java."
+    },
+    {
+        "role": "user",
+        "content": "what is my favorite food"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't have your favorite food stored yet."
+    },
+    {
+        "role": "user",
+        "content": "My goal is to become a software engineer."
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a software engineer, become an AI engineer, and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what career am I aiming for"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become an AI engineer, become a software engineer, and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what profession do I want in the future"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become an AI engineer, become a software engineer, and become a researcher."
+    },
+    {
+        "role": "user",
+        "content": "what do I want to do as a career"
+    },
+    {
+        "role": "assistant",
+        "content": "Your goals are to become a researcher, become a software engineer, and become an AI engineer."
+    }
+]

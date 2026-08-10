@@ -1,0 +1,12 @@
+[
+    {
+        "id": "mem_2",
+        "category": "interest",
+        "fact_type": "interest",
+        "subject": "flutter also",
+        "value": "flutter also",
+        "content": "User is interested in flutter also",
+        "importance": "medium",
+        "status": "active"
+    }
+]
