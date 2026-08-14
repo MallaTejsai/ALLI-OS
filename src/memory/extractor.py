@@ -1,4 +1,4 @@
-"""Deterministic durable-fact extraction for ALLI v0.5."""
+"""Deterministic durable-fact extraction for ALLI v0.6."""
 
 from __future__ import annotations
 
@@ -58,7 +58,6 @@ TEMPORARY_PHRASES = (
     "just today",
     "for today",
     "tomorrow",
-    "tonight",
     "this week",
     "i am hungry",
     "i'm hungry",
@@ -473,7 +472,7 @@ def extract_interest_and_learning_deletes(message: str) -> list[dict]:
         r"\bi\s+(?:do not|don't)\s+(?:want to be\s+)?(?:interested|intrested|intrest)\s+(?:in\s+)?(.+)$",
         r"\bi\s+stopped\s+being\s+(?:interested|intrested|intrest)\s+(?:in\s+)?(.+)$",
         r"\bno longer\s+(?:interested|intrested)\s+in\s+(.+)$",
-        r"\bi\s+(?:do not|don't)\s+like\s+(.+)$",
+      
         r"\bi\s+(?:do not|don't)\s+want\s+(?!to\s+become\b|to\s+learn\b|to\s+be\b)(.+)$",
         r"\bi\s+no longer\s+like\s+(.+)$",
     ]
@@ -556,17 +555,6 @@ def normalize_preference_subject(subject: str) -> str:
     }
     words = [word for word in text.split() if word not in stop]
     return " ".join(words)
-
-
-def preference_subjects_match(left: str, right: str) -> bool:
-    """True when two normalized preference subjects refer to the same thing."""
-    a = normalize_preference_subject(left or "")
-    b = normalize_preference_subject(right or "")
-    if not a or not b:
-        return False
-    # After generic filler removal, equivalent phrasings share one key
-    # (c / c program / c programming → "c"). Distinct subjects stay distinct.
-    return a == b
 
 
 def preference_subject(content: str) -> str:
@@ -971,13 +959,13 @@ class MemoryExtractor:
     def _extract_skill_or_interest(self, text: str):
         """Return one op dict, a list of ops, or None."""
         # Learning intent — distinct from skills and career goals.
-        match = re.search(
+        learn_match = re.search(
             r"\bi(?:\s+want to|'d like to|would like to)\s+learn\s+(.+)",
             text,
             flags=re.IGNORECASE,
         )
-        if match:
-            topic = match.group(1).strip().rstrip(".!?")
+        if learn_match:
+            topic = learn_match.group(1).strip().rstrip(".!?")
             if len(topic) >= 2:
                 return {
                     "action": "ADD",
@@ -990,13 +978,13 @@ class MemoryExtractor:
                 }
 
         # Existing skills / knowledge.
-        match = re.search(
+        know_match = re.search(
             r"\bi (?:know|already know|can use|am skilled in|am good at)\s+(.+)",
             text,
             flags=re.IGNORECASE,
         )
-        if match:
-            skill = match.group(1).strip().rstrip(".!?")
+        if know_match:
+            skill = know_match.group(1).strip().rstrip(".!?")
             if len(skill) >= 2:
                 return {
                     "action": "ADD",
@@ -1009,13 +997,13 @@ class MemoryExtractor:
                 }
 
         # Learning status (not a completed skill).
-        match = re.search(
+        learn_status_match = re.search(
             r"\bi(?:'m| am)\s+learning\s+(.+)",
             text,
             flags=re.IGNORECASE,
         )
-        if match:
-            topic = match.group(1).strip().rstrip(".!?")
+        if learn_status_match:
+            topic = learn_status_match.group(1).strip().rstrip(".!?")
             if len(topic) >= 2:
                 return {
                     "action": "ADD",
@@ -1028,19 +1016,19 @@ class MemoryExtractor:
                 }
 
         # Interests — including common typos of "interested".
-        match = re.search(
+        interest_match = re.search(
             r"\bi am (?:interested|intrested|intrest|into)\s+(?:in\s+)?(.+)",
             text,
             flags=re.IGNORECASE,
         )
-        if not match:
-            match = re.search(
+        if not interest_match:
+            interest_match = re.search(
                 r"\bi(?:'m)?\s+(?:interested|intrested)\s+in\s+(.+)",
                 text,
                 flags=re.IGNORECASE,
             )
-        if match:
-            interest_blob = match.group(1).strip().rstrip(".!?")
+        if interest_match:
+            interest_blob = interest_match.group(1).strip().rstrip(".!?")
             if len(interest_blob) < 2:
                 return None
             items = split_list_items(interest_blob)
