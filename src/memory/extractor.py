@@ -473,7 +473,7 @@ def extract_interest_and_learning_deletes(message: str) -> list[dict]:
         r"\bi\s+(?:do not|don't)\s+(?:want to be\s+)?(?:interested|intrested|intrest)\s+(?:in\s+)?(.+)$",
         r"\bi\s+stopped\s+being\s+(?:interested|intrested|intrest)\s+(?:in\s+)?(.+)$",
         r"\bno longer\s+(?:interested|intrested)\s+in\s+(.+)$",
-        r"\bi\s+(?:do not|don't)\s+like\s+(.+)$",
+      
         r"\bi\s+(?:do not|don't)\s+want\s+(?!to\s+become\b|to\s+learn\b|to\s+be\b)(.+)$",
         r"\bi\s+no longer\s+like\s+(.+)$",
     ]
