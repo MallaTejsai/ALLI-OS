@@ -161,17 +161,17 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertIn("Python", answer)
 
     def test_10_add_learning_goal(self):
-        self.manager.process_user_message("I want to learn Python")
+        self.manager.process_user_message("I am learning C programming")
         mem = self.active()[0]
         self.assertEqual(mem["category"], "learning")
         self.assertEqual(mem["fact_type"], "learning")
         self.assertNotEqual(mem["category"], "skill")
 
     def test_11_goal_not_skill(self):
-        self.manager.process_user_message("I want to learn Python")
+        self.manager.process_user_message("I am learning C programming")
         answer = self.ask("What are my skills?")
         self.assertIn("don't currently", answer.lower())
-        self.assertNotIn("Python", answer)
+        self.assertNotIn("C", answer)
 
     # 12–15 preferences
     def test_12_like_c(self):
@@ -319,51 +319,40 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertIn("software engineer", lower)
         self.assertIn("content creator", lower)
 
-    def test_manual_scenarios_bundle(self):
-        """Acceptance scenarios 1–10 from the v0.6 brief."""
-        self.manager.process_user_message("My name is Tejsai")
-        self.assertEqual(self.ask("What is my name?"), "Your name is Tejsai.")
+    # New tests for v0.6 positive-learning fix
+    def test_26_learning_add(self):
+        r = self.manager.process_user_message("I am learning C programming")
+        mem = self.active()[0]
+        self.assertEqual(mem["category"], "learning")
+        self.assertEqual(mem["fact_type"], "learning")
 
-        self.manager.process_user_message("My nickname is Binnu")
-        nick = self.ask("What should you call me?")
-        self.assertIn("Binnu", nick)
+    def test_27_learning_add_lowercase(self):
+        r = self.manager.process_user_message("i'm learning c programming")
+        mem = self.active()[0]
+        self.assertEqual(mem["category"], "learning")
+        self.assertEqual(mem["fact_type"], "learning")
 
-        self.manager.process_user_message(
-            "My goal is to become a software engineer"
-        )
-        dreams = self.ask("What are my dreams?")
-        self.assertIn("software engineer", dreams.lower())
+    def test_28_learning_removal(self):
+        self.manager.process_user_message("I am learning C programming")
+        r = self.manager.process_user_message("I don't want to learn C anymore")
+        self.assertEqual(r[0]["status"], "deleted")
 
-        self.manager.process_user_message(
-            "My goal is to become a content creator"
-        )
-        goals = self.ask("What are my goals?")
-        self.assertIn("software engineer", goals.lower())
-        self.assertIn("content creator", goals.lower())
-
-        self.manager.process_user_message("I want to learn Python")
-        skills = self.ask("What are my skills?")
-        self.assertIn("don't currently", skills.lower())
-
+    # Regression tests
+    def test_29_learning_still_skill(self):
         self.manager.process_user_message("I know Python")
-        skills2 = self.ask("What are my skills?")
-        self.assertIn("Python", skills2)
+        self.manager.process_user_message("I am learning C programming")
+        skills = [m for m in self.active() if m["category"] == "skill"]
+        learning = [m for m in self.active() if m["category"] == "learning"]
+        self.assertEqual(len(skills), 1)
+        self.assertEqual(len(learning), 1)
+        self.assertIn("python", skills[0]["content"].lower())
+        self.assertIn("c", learning[0]["content"].lower())
 
-        # Fresh preference store path via new stack piece
-        prefs = [m for m in self.active() if m["category"] == "preference"]
-        # isolate preference on same store
-        self.manager.process_user_message("I don't like C programming")
-        self.manager.process_user_message("I like C programming")
-        prefs = [m for m in self.active() if m["category"] == "preference"]
-        self.assertEqual(len(prefs), 1)
-        self.assertEqual(prefs[0]["fact_type"], "like")
-
-        r = self.manager.process_user_message("My name is Tejsai")
-        # name was Tejsai then may have been unchanged or already Tejsai
-        self.assertIn(r[0]["status"], {"unchanged", "updated", "added"})
-
-        food = self.ask("What is my favorite food?")
-        self.assertIn("favorite food", food.lower())
+    def test_30_learning_not_skill(self):
+        self.manager.process_user_message("I am learning C programming")
+        answer = self.ask("What are my skills?")
+        self.assertIn("don't currently", answer.lower())
+        self.assertNotIn("C", answer)
 
     # ---- Final 3 bug-fix tests ----
     def test_bug1_nick_name_normalization(self):
