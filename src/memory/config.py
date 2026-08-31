@@ -6,7 +6,7 @@ import os
 CHAT_MODEL = "qwen2.5:7b"
 
 # Embedding model for semantic memory (must support ollama.embed)
-EMBEDDING_MODEL = "all-minilm"
+EMBEDDING_MODEL = "all-minilm:latest"
 
 # Retrieval
 MEMORY_SIMILARITY_THRESHOLD = 0.30

@@ -87,6 +87,7 @@ class MemoryRetriever:
                 scores=intent.scores,
                 is_memory_read=True,
                 is_general_knowledge=False,
+                preference_polarity=intent.preference_polarity,
                 filters=filters,
                 requested=[label],
                 normalized_query=intent.normalized_query,
@@ -146,6 +147,29 @@ class MemoryRetriever:
         if intent.is_general_knowledge or not intent.is_memory_read:
             return []
 
+        # An overview is intentionally broad: it summarizes active stored facts
+        # rather than only facts semantically close to the query wording.
+        if intent.primary == "personal_overview":
+            selected = [
+                {
+                    "memory": memory,
+                    "similarity": 1.0,
+                    "category_match": True,
+                    "final_score": 1.0,
+                }
+                for memory in active
+            ]
+            self.last_debug["selected"] = [
+                {
+                    "id": item["memory"].get("id"),
+                    "content": item["memory"].get("content"),
+                    "similarity": item["similarity"],
+                    "final_score": item["final_score"],
+                }
+                for item in selected
+            ]
+            return selected
+
         embed_text = intent.normalized_query or question
         try:
             question_vec = self.embedding_store.generate_embedding(embed_text)
@@ -172,13 +196,23 @@ class MemoryRetriever:
             fact_type = str(memory.get("fact_type", "")).lower()
 
             category_match = True
+
             if allowed_categories is not None:
                 category_match = category in allowed_categories
+
             if allowed_fact_types is not None:
                 if intent.primary == "preference":
-                    category_match = category_match and category == "preference"
+                    category_match = (
+                        category_match
+                        and category == "preference"
+                        and fact_type in allowed_fact_types
+                    )
                 else:
-                    category_match = category_match and fact_type in allowed_fact_types
+                    category_match = (
+                        category_match
+                        and fact_type in allowed_fact_types
+                    )
+
             if fact_type in exclude_fact_types:
                 category_match = False
 
@@ -187,7 +221,11 @@ class MemoryRetriever:
 
             similarity = cosine_similarity(question_vec, embedding)
             subject_sim = None
-            if category == "preference" and memory.get("subject"):
+            if (
+                category == "preference"
+                and memory.get("subject")
+                and intent.preference_polarity is None
+            ):
                 try:
                     subject_vec = self.embedding_store.generate_embedding(
                         f"personal preference about {memory['subject']}"
@@ -206,7 +244,11 @@ class MemoryRetriever:
                     continue
 
             if strict and category_match:
-                effective_threshold = config.FILTERED_SIMILARITY_THRESHOLD
+                # Once a memory-read intent has selected a strict category,
+                # return its current records.  Semantic similarity is too
+                # brittle for terse stored values such as "C" and for
+                # generic preference questions with no named subject.
+                effective_threshold = 0.0
             elif category_match:
                 effective_threshold = threshold
             else:
@@ -263,6 +305,12 @@ class MemoryRetriever:
             secondary = self.intent_detector.secondary_identity_intents(intent)
             return set(secondary)
         if intent.primary == "preference":
+            if intent.preference_polarity == "like":
+                return {"like"}
+
+            if intent.preference_polarity == "dislike":
+                return {"dislike"}
+
             return {"like", "dislike", "preference"}
         if base is None:
             return None

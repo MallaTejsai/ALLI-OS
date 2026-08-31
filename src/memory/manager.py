@@ -597,7 +597,9 @@ class SafeMemoryManager:
             return None, "ambiguous"
 
         # Semantic assist: explicit hint required; must be a unique clear winner
-        # among active goals, with at least one shared token (never bare similarity).
+        # among active goals.  We no longer require a shared token bridge
+        # between hint and memory — bare semantic similarity above the
+        # threshold is sufficient when the hint is explicit.
         hint_tokens = set(normalize_goal_text(hint).split())
         if not hint_tokens:
             return None, "missing"
@@ -615,9 +617,9 @@ class SafeMemoryManager:
                 continue
             if memory.get("fact_type") == "learning_goal":
                 continue
-            mem_tokens = set(normalize_goal_text(memory.get("content", "")).split())
-            if not (hint_tokens & mem_tokens):
-                continue
+            # Old behavior required hint_tokens & mem_tokens non-empty.
+            # Removing this restriction allows semantic matches without
+            # shared lexical tokens, which is exactly the relaxation requested.
             candidates.append((score, memory))
 
         if not candidates:
@@ -751,7 +753,7 @@ class SafeMemoryManager:
                 cand = normalize_topic_text(
                     str(memory.get("value") or memory.get("content") or "")
                 )
-                if hint_norm == cand or hint_norm in cand:
+                if hint_norm == cand:
                     return memory, "lexical_phrase"
             return None, "ambiguous"
 
@@ -830,6 +832,11 @@ class SafeMemoryManager:
                 continue
 
             old_content = str(memory.get("content", ""))
+
+            # --- Bug 3 fix: normalized-content fallback first ---
+            # Always check normalized-content match before semantic similarity.
+            # This ensures duplicates are detected even when embeddings are
+            # missing, None, or invalid, preventing silent "unrelated" treatment.
             if normalized_content(old_content) == new_norm:
                 return memory
 
@@ -838,6 +845,8 @@ class SafeMemoryManager:
                 if new_goal_norm and old_goal_norm == new_goal_norm:
                     return memory
 
+            # Semantic similarity as a secondary check; safely handles
+            # missing/invalid embeddings (returns False without crashing).
             if self._semantic_same_fact(memory, content):
                 if category == "goal":
                     old_goal_norm = normalize_goal_text(old_content)

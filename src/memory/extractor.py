@@ -193,6 +193,22 @@ def strip_goal_filler(phrase: str) -> str:
     return text
 
 
+def strip_temporal_suffix(value: str) -> str:
+    """Remove trailing state-change words from a stored fact's topic."""
+    value = (value or "").strip()
+    # Strip trailing temporal words and preceding prepositions (in/the)
+    value = re.sub(
+        r"\s*(?:in|the)?\s*(?:again|anymore|now|currently|today|still|future)\s*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    # Strip if the entire value is a temporal word
+    if value.lower() in {"again", "anymore", "now", "currently", "today", "still", "future"}:
+        return ""
+    return value
+
+
 def goal_match_score(hint: str, memory: dict) -> float:
     """
     Lexical confidence that `hint` refers to this goal memory.
@@ -204,11 +220,15 @@ def goal_match_score(hint: str, memory: dict) -> float:
     if not hint_norm:
         return 0.0
 
-    content_norm = normalize_goal_text(str(memory.get("content", "")))
-    value_norm = normalize_goal_text(
-        strip_goal_filler(str(memory.get("value", "") or ""))
+    content_norm = normalize_goal_text(
+        strip_temporal_suffix(str(memory.get("content", "")))
     )
-    subject_norm = normalize_goal_text(str(memory.get("subject", "") or ""))
+    value_norm = normalize_goal_text(
+        strip_temporal_suffix(strip_goal_filler(str(memory.get("value", "") or "")))
+    )
+    subject_norm = normalize_goal_text(
+        strip_temporal_suffix(str(memory.get("subject", "") or ""))
+    )
 
     for cand in (content_norm, value_norm, subject_norm):
         if not cand:
@@ -551,10 +571,21 @@ def normalize_preference_subject(subject: str) -> str:
 
     stop = {
         "a", "an", "the", "my", "this", "that", "in", "of", "for",
-        "with", "using", "to",
+        "with", "using", "to", "again",
     }
     words = [word for word in text.split() if word not in stop]
     return " ".join(words)
+
+
+def preference_subjects_match(left: str, right: str) -> bool:
+    """Return True when two preference subjects are equivalent."""
+    a = normalize_preference_subject(left or "")
+    b = normalize_preference_subject(right or "")
+
+    if not a or not b:
+        return False
+
+    return a == b
 
 
 def preference_subject(content: str) -> str:
@@ -585,6 +616,22 @@ def normalize_goal_text(content: str) -> str:
         if w not in {"a", "an", "the", "to", "my", "user", "i"}
     ]
     return " ".join(words)
+
+
+def strip_temporal_suffix(value: str) -> str:
+    """Remove trailing state-change words from a stored fact's topic."""
+    value = (value or "").strip()
+    # Strip trailing temporal words and preceding prepositions (in/the)
+    value = re.sub(
+        r"\s*(?:in|the)?\s*(?:again|anymore|now|currently|today|still|future)\s*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    # Strip if the entire value is a temporal word
+    if value.lower() in {"again", "anymore", "now", "currently", "today", "still", "future"}:
+        return ""
+    return value
 
 
 class MemoryExtractor:
@@ -641,21 +688,42 @@ class MemoryExtractor:
 
         # Interests / skills / learning before name so "I am interested/intrested…"
         # never falls through to the identity "I am <name>" path.
-        for extractor in (
-            self._extract_nickname,
-            self._extract_preference,
-            self._extract_skill_or_interest,
-            self._extract_name,
-            self._extract_goal,
-        ):
-            operation = extractor(text)
-            if not operation:
-                continue
-            if isinstance(operation, list):
-                return operation
-            return [operation]
+        # Process every clause in a compound statement (comma-separated, with optional
+        # trailing "and X" on the last clause), collecting one operation per extractor
+        # per clause so that one user message can produce multiple memory operations.
+        clauses: list[str] = []
+        parts = text.split(",")
+        for i, part in enumerate(parts):
+            p = part.strip()
+            if i < len(parts) - 1:
+                clauses.append(p)
+            else:
+                # Last clause: strip leading "and " if present
+                if p.lower().startswith("and "):
+                    p = p[4:].strip()
+                clauses.append(p)
 
-        return []
+        operations: list[dict] = []
+        for clause in clauses:
+            if not clause:
+                continue
+            for extractor in (
+                self._extract_nickname,
+                self._extract_preference,
+                self._extract_skill_or_interest,
+                self._extract_name,
+                self._extract_goal,
+self._extract_education,
+            ):
+                operation = extractor(clause)
+                if not operation:
+                    continue
+                if isinstance(operation, list):
+                    operations.extend(operation)
+                else:
+                    operations.append(operation)
+
+        return operations
 
     def _extract_delete(self, text: str) -> list[dict]:
         lower = text.lower()
@@ -817,6 +885,7 @@ class MemoryExtractor:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 subject = match.group(1).strip().rstrip(".!?")
+                subject = strip_temporal_suffix(subject)
                 if len(subject) < 1:
                     return None
                 # Allow single-token subjects such as "C".
@@ -845,6 +914,7 @@ class MemoryExtractor:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 subject = match.group(1).strip().rstrip(".!?")
+                subject = strip_temporal_suffix(subject)
                 if len(subject) < 1:
                     return None
                 # Allow single-token subjects such as "C".
@@ -945,6 +1015,22 @@ class MemoryExtractor:
                     flags=re.IGNORECASE,
                 ).strip()
 
+                # Reject goals with empty or non-substantive content.
+                # A goal must have a substantive object after "become"/"be";
+                # temporal words or the bare verb do not qualify.
+                value_lower = value.lower().strip()
+                if not value_lower:
+                    return None
+                if value_lower == "become":
+                    return None
+                if value_lower in {"again", "anymore", "now", "currently", "today", "still", "future"}:
+                    return None
+                # Also reject temporal phrases like "in future" where the
+                # extracted value consists of a preposition + temporal noun.
+                words = value_lower.split()
+                if len(words) == 2 and words[1] in {"again", "anymore", "now", "currently", "today", "still", "future"}:
+                    return None
+
                 return {
                     "action": "ADD",
                     "category": "goal",
@@ -956,6 +1042,26 @@ class MemoryExtractor:
                 }
         return None
 
+    def _extract_education(self, text: str):
+        """Extract education/background facts such as "I am studing diploma second year".
+        """
+        pattern = r"\bi am\s+(?:studing|studying)\s+(.+)"
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            content = match.group(1).strip().rstrip(".!?")
+            if len(content) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "education",
+                    "fact_type": "education",
+                    "content": f"User is educated in {content}",
+                    "value": content,
+                    "subject": content,
+                    "importance": "medium",
+                }
+        return None
+
+
     def _extract_skill_or_interest(self, text: str):
         """Return one op dict, a list of ops, or None."""
         # Learning intent — distinct from skills and career goals.
@@ -966,7 +1072,7 @@ class MemoryExtractor:
         )
         if learn_match:
             topic = learn_match.group(1).strip().rstrip(".!?")
-            if len(topic) >= 2:
+            if len(topic) >= 1:
                 return {
                     "action": "ADD",
                     "category": "learning",
@@ -985,7 +1091,7 @@ class MemoryExtractor:
         )
         if know_match:
             skill = know_match.group(1).strip().rstrip(".!?")
-            if len(skill) >= 2:
+            if len(skill) >= 1:
                 return {
                     "action": "ADD",
                     "category": "skill",
@@ -1004,7 +1110,8 @@ class MemoryExtractor:
         )
         if learn_status_match:
             topic = learn_status_match.group(1).strip().rstrip(".!?")
-            if len(topic) >= 2:
+            topic = strip_temporal_suffix(topic)
+            if len(topic) >= 1:
                 return {
                     "action": "ADD",
                     "category": "learning",

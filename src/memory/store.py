@@ -132,7 +132,17 @@ def infer_fact_type(category: str, content: str) -> str:
             )
         ):
             return "dislike"
-        return "like"
+        if any(
+            phrase in text
+            for phrase in (
+                "likes",
+                "like",
+                "enjoys",
+                "enjoy",
+            )
+        ):
+            return "like"
+        return "other"
 
     if category == "education":
         if "college" in text or "university" in text:
@@ -192,6 +202,21 @@ def extract_memory_value(
         return text.split(" is ", 1)[-1].strip().rstrip(".")
 
     return text
+
+
+def normalize_interest_value(value: str) -> str:
+    """Remove accidental repeated "I am interested in" wrappers."""
+    text = str(value or "").strip().rstrip(".")
+    pattern = re.compile(
+        r"^(?:user\s+is\s+)?i(?:'m|\s+am)\s+"
+        r"(?:interested|intrested|intrest)\s+in\s+",
+        flags=re.IGNORECASE,
+    )
+    while True:
+        cleaned = pattern.sub("", text).strip()
+        if cleaned == text:
+            return cleaned
+        text = cleaned
 
 
 def extract_memory_subject(
@@ -368,6 +393,14 @@ class MemoryStore:
         """Normalize v0.4 records without duplicating or dropping facts."""
         changed = False
         now = utc_now_iso()
+        # Imported lazily to keep store/extractor dependencies one-directional
+        # during module initialization.
+        from .extractor import (
+            normalize_preference_subject,
+            normalize_topic_subject,
+            strip_temporal_suffix,
+            normalize_goal_text,
+        )
 
         for memory in self.memories:
             if "id" not in memory or not memory["id"]:
@@ -458,6 +491,51 @@ class MemoryStore:
                 memory["value"] = value
                 changed = True
 
+            if memory.get("category") == "interest":
+                clean_value = normalize_interest_value(value)
+                if clean_value and clean_value != value:
+                    value = clean_value
+                    memory["value"] = clean_value
+                    memory["content"] = f"User is interested in {clean_value}"
+                    changed = True
+
+            # Repair legacy temporal wording in active preference and learning
+            # records in place.  The record and its history are retained; only
+            # its canonical current representation changes.
+            if memory.get("status", "active") == "active":
+                category = memory.get("category")
+                if category == "preference":
+                    raw_subject = memory.get("subject") or extract_memory_subject(
+                        "preference", memory.get("fact_type", "like"),
+                        memory.get("content", ""), memory.get("value", ""),
+                    )
+                    subject = normalize_preference_subject(raw_subject)
+                    if subject and memory.get("subject") != subject:
+                        memory["subject"] = subject
+                        changed = True
+                    polarity = memory.get("fact_type", "like")
+                    canonical_content = f"User {'dislikes' if polarity == 'dislike' else 'likes'} {subject}"
+                    if subject and memory.get("content") != canonical_content:
+                        memory["content"] = canonical_content
+                        memory["embedding"] = None
+                        changed = True
+                elif category == "learning":
+                    topic = strip_temporal_suffix(str(memory.get("value", "")))
+                    if topic:
+                        subject = normalize_topic_subject(topic)
+                        prefix = "User wants to learn" if "wants to learn" in str(memory.get("content", "")).lower() else "User is learning"
+                        canonical_content = f"{prefix} {topic}"
+                        if memory.get("value") != topic:
+                            memory["value"] = topic
+                            changed = True
+                        if memory.get("subject") != subject:
+                            memory["subject"] = subject
+                            changed = True
+                        if memory.get("content") != canonical_content:
+                            memory["content"] = canonical_content
+                            memory["embedding"] = None
+                            changed = True
+
             subject = extract_memory_subject(
                 memory.get("category", "other"),
                 memory.get("fact_type", "other"),
@@ -492,6 +570,40 @@ class MemoryStore:
             if memory.get("embedding_version") != config.EMBEDDING_TEXT_VERSION:
                 memory["embedding"] = None
                 memory["embedding_version"] = config.EMBEDDING_TEXT_VERSION
+                changed = True
+
+        # Consolidate only active records that now represent the same current
+        # fact.  Older duplicates become inactive history; no user data is
+        # deleted and pre-existing inactive records are left unchanged.
+        active_groups: dict[tuple[str, str], list[dict]] = {}
+        for memory in self.memories:
+            if str(memory.get("status", "active")).lower() != "active":
+                continue
+            category = memory.get("category")
+            if category == "preference":
+                key = normalize_preference_subject(str(memory.get("subject", "")))
+            elif category == "learning":
+                key = normalize_topic_subject(str(memory.get("subject") or memory.get("value", "")))
+            elif category == "goal":
+                key = normalize_goal_text(str(memory.get("content") or memory.get("subject", "")))
+            else:
+                continue
+            if key:
+                active_groups.setdefault((category, key), []).append(memory)
+
+        for duplicates in active_groups.values():
+            if len(duplicates) < 2:
+                continue
+            winner = max(
+                enumerate(duplicates),
+                key=lambda item: (str(item[1].get("updated_at", "")), item[0]),
+            )[1]
+            for memory in duplicates:
+                if memory is winner:
+                    continue
+                memory["status"] = "inactive"
+                memory["superseded_by"] = winner.get("id")
+                memory["embedding"] = None
                 changed = True
 
         return changed
@@ -582,6 +694,11 @@ class MemoryStore:
             resolved_value = extract_memory_value(
                 category, fact_type, content, value
             )
+
+        if category == "interest":
+            resolved_value = normalize_interest_value(resolved_value)
+            if resolved_value:
+                content = f"User is interested in {resolved_value}"
 
         resolved_subject = extract_memory_subject(
             category,

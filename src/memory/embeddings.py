@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import math
 from typing import Iterable, Optional, Sequence
 
@@ -19,7 +20,12 @@ class EmbeddingStore:
 
     def __init__(self, model: Optional[str] = None, client=None):
         self.model = model or config.EMBEDDING_MODEL
-        self._client = client or ollama
+        # Use explicit client if provided, otherwise use the configured Ollama host
+        if client is not None:
+            self._client = client
+        else:
+            # Read OLLAMA_HOST from environment, default to 127.0.0.1:11434
+            self._client = ollama.Client(host=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
         self._cache: dict[str, list[float]] = {}
         self._verified = False
 

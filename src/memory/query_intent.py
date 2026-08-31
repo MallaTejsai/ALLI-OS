@@ -109,16 +109,17 @@ CATEGORY_QUERY_CUES: dict[str, tuple[str, ...]] = {
         r"\bdreams?\b",
         r"\bambitions?\b",
         r"\baims?\b",
+        r"\b(?:my\s+)?goals?\b",
         r"\bwant to become\b",
     ),
     "skill": (r"\bskills?\b",),
-    "learning": (r"\blearning\b", r"\bam i learning\b", r"\bwant to learn\b"),
+    "learning": (r"\blearning\b", r"\bam i learning\b", r"\bwhat i(?:'m| am) learning\b", r"\bwant to learn\b"),
     "preference": (
-        r"\bpreferences?\b",
-        r"\bwhat do i like\b",
-        r"\bwhat don't i like\b",
-        r"\bwhat do i dislike\b",
-    ),
+    r"\bpreferences?\b",
+    r"\bwhat\s+(?:do\s+)?i\s+(?:like|dislike|enjoy|hate)\b",
+    r"\bwhat\s+don'?t\s+i\s+(?:like|enjoy)\b",
+    r"\bwhich\b.*\b(?:i\s+)?(?:like|dislike|enjoy|hate)\b",
+),
     "interest": (r"\binterests?\b", r"\bhobb(?:y|ies)\b"),
     "project": (r"\bprojects?\b",),
     "habit": (r"\bhabits?\b", r"\broutines?\b"),
@@ -205,6 +206,7 @@ class QueryIntent:
     score: float
     scores: dict[str, float] = field(default_factory=dict)
     is_memory_read: bool = False
+    preference_polarity: Optional[str] = None
     is_general_knowledge: bool = False
     filters: dict = field(default_factory=dict)
     requested: list[str] = field(default_factory=list)
@@ -254,7 +256,32 @@ class QueryIntentDetector:
     def detect(self, query: str) -> QueryIntent:
         raw = (query or "").strip()
         normalized = normalize_memory_query(raw)
+        preference_polarity = self._detect_preference_polarity(normalized)
         if not normalized:
+            return QueryIntent(
+                primary="unknown",
+                score=0.0,
+                is_memory_read=False,
+                is_general_knowledge=True,
+                normalized_query=normalized,
+            )
+
+        # Forecasts are not reads of today's stored profile.  In particular,
+        # a goal is an aspiration, not evidence of a guaranteed future fact.
+        if self._is_future_forecast(normalized):
+            return QueryIntent(
+                primary="unknown",
+                score=0.0,
+                is_memory_read=False,
+                is_general_knowledge=True,
+                normalized_query=normalized,
+            )
+
+        # These ask for advice or a relationship to an unnamed object, not a
+        # stored profile list.  They may be answered by the chat layer, with
+        # memory supplied as optional context, but must not retrieve a category
+        # merely because it is semantically adjacent.
+        if self._is_advice_or_ambiguous_memory_query(normalized):
             return QueryIntent(
                 primary="unknown",
                 score=0.0,
@@ -352,10 +379,81 @@ class QueryIntentDetector:
             score=best_score,
             scores=scores,
             is_memory_read=is_memory,
+    preference_polarity=(
+        preference_polarity
+        if (is_memory or primary == "preference")
+        else None
+    ),
             is_general_knowledge=is_general,
             filters=filters,
             requested=requested if is_memory else [],
             normalized_query=normalized,
+        )
+    def _detect_preference_polarity(
+        self,
+        normalized_query: str,
+    ) -> Optional[str]:
+        """Detect whether a preference question asks for likes or dislikes."""
+        text = normalized_query.lower()
+
+        if re.search(
+            r"\bwhat\s+(?:(?:do|does)\s+)?(?:i|the user)\s+dislike\b",
+            text,
+        ):
+            return "dislike"
+
+        if re.search(
+            r"\bwhat\s+(?:(?:do|does)\s+)?(?:i|the user)\s+"
+            r"(?:do\s+not|don't|does\s+not|doesn't|not)\s+like\b"
+            r"|\bwhat\s+(?:don't|do\s+not|doesn't|does\s+not)\s+"
+            r"(?:i|the user)\s+like\b",
+            text,
+        ):
+            return "dislike"
+
+        if re.search(
+            r"\bwhat\s+(?:(?:do|does)\s+)?(?:i|the user)\s+like\b",
+            text,
+        ):
+            return "like"
+
+        if re.search(
+            r"\b(?:what|which)\b.*\b(?:don'?t|do\s+not)\s+"
+            r"i\s+enjoy\b",
+            text,
+        ):
+            return "dislike"
+
+        if re.search(
+            r"\b(?:what|which)\b.*\b(?:do\s+)?i\s+enjoy\b",
+            text,
+        ):
+            return "like"
+
+        return None
+
+    @staticmethod
+    def _is_future_forecast(normalized_query: str) -> bool:
+        """Identify speculative future questions rather than memory reads."""
+        return bool(
+            re.search(
+                r"\b(?:will\s+i|will\s+my|my\s+future|future\s+career|"
+                r"in\s+\d+\s+years?|definitely\s+be)\b",
+                normalized_query,
+            )
+        )
+
+    @staticmethod
+    def _is_advice_or_ambiguous_memory_query(normalized_query: str) -> bool:
+        """Keep recommendations and unnamed-object questions out of memory reads."""
+        return bool(
+            re.search(
+                r"\bwhat\s+should\s+i\s+learn\b|"
+                r"\bwhich\s+technology\s+is\s+best\s+for\s+me\b|"
+                r"\bwhat\s+do\s+i\s+like\s+about\s+"
+                r"(?:something|it|that|this)\b",
+                normalized_query,
+            )
         )
 
     def _cued_intents(self, normalized_query: str) -> list[str]:

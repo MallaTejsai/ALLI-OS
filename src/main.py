@@ -18,7 +18,10 @@ SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+import ollama
 from ollama import chat
+
+ollama_client = ollama.Client(host=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
 
 from memory import (
     CHAT_MODEL,
@@ -217,7 +220,7 @@ def main() -> None:
     os.makedirs(config.MEMORY_DIR, exist_ok=True)
     os.makedirs(config.BACKUP_DIR, exist_ok=True)
 
-    embedding_store = EmbeddingStore()
+    embedding_store = EmbeddingStore(client=ollama_client)
     embeddings_ok = True
     try:
         embedding_store.verify_model()

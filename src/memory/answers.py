@@ -196,10 +196,7 @@ def _single_intent_answer(
         )
 
     if primary == "personal_overview":
-        lines = ["Here is what I currently have stored about you:"]
-        for memory in memories:
-            lines.append(f"- {memory.get('content', '')}")
-        return "\n".join(lines)
+        return _personal_overview_answer(memories)
 
     if len(memories) == 1:
         return memories[0].get(
@@ -275,11 +272,14 @@ def _display_value(memory: dict) -> str:
         isinstance(value, str)
         and value.strip()
         and value.strip().lower() not in {"like", "dislike"}
+        and not value.strip().lower().startswith("i am interested in")
     ):
         return value.strip()
 
     content = str(memory.get("content", "")).strip()
-    for prefix in (
+    # Iteratively strip all known prefixes from content
+    prefixes = [
+        "I am interested in",
         "User's name is ",
         "User's nickname is ",
         "User wants to become ",
@@ -290,11 +290,16 @@ def _display_value(memory: dict) -> str:
         "User is interested in ",
         "User knows ",
         "User is learning ",
-    ):
-        if content.lower().startswith(prefix.lower()):
-            return content[len(prefix):].strip()
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if content.lower().startswith(prefix.lower()):
+                content = content[len(prefix):].strip()
+                changed = True
+                break
     return content
-
 
 def _list_answer(
     memories: list[dict],
@@ -363,6 +368,48 @@ def _preference_answer(memories: list[dict]) -> str:
     if not parts:
         return MISSING_TEMPLATES["preference"]
     return " ".join(parts)
+
+
+def _personal_overview_answer(memories: list[dict]) -> str:
+    """Summarize active structured facts without adding unstored details."""
+    lines = ["Here is what I currently have stored about you:"]
+    labels = {
+        "identity": "Identity",
+        "education": "Education",
+        "goal": "Goals",
+        "skill": "Skills",
+        "learning": "Learning",
+        "interest": "Interests",
+        "preference": "Preferences",
+        "project": "Projects",
+        "routine": "Habits",
+    }
+
+    for category, label in labels.items():
+        category_memories = [
+            memory for memory in memories
+            if memory.get("category") == category
+        ]
+        if not category_memories:
+            continue
+
+        if category == "preference":
+            lines.append(f"- {label}: {_preference_answer(category_memories)}")
+            continue
+
+        values = [_display_value(memory) for memory in category_memories]
+        values = [value for value in values if value]
+        if values:
+            lines.append(f"- {label}: {_join_natural(values)}")
+
+    known_categories = set(labels)
+    for memory in memories:
+        if memory.get("category") not in known_categories:
+            content = str(memory.get("content", "")).strip()
+            if content:
+                lines.append(f"- {content}")
+
+    return "\n".join(lines)
 
 
 def llm_memory_system_prompt() -> str:

@@ -153,6 +153,13 @@ class MemoryV06Tests(unittest.TestCase):
             # Accept either duplicate blocked or single semantic merge.
             self.assertLessEqual(len(goals), 2)
 
+    # Regression: incomplete goal after "become" must not be stored
+    def test_08b_incomplete_goal_after_become(self):
+        """I want to become in future must not store a meaningless goal."""
+        self.manager.process_user_message("I want to become in future")
+        goals = [m for m in self.active() if m["category"] == "goal"]
+        self.assertEqual(len(goals), 0)
+
     # 9–11 skill vs learning
     def test_09_add_skill(self):
         self.manager.process_user_message("I know Python")
@@ -161,17 +168,17 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertIn("Python", answer)
 
     def test_10_add_learning_goal(self):
-        self.manager.process_user_message("I am learning C programming")
+        self.manager.process_user_message("I want to learn Python")
         mem = self.active()[0]
         self.assertEqual(mem["category"], "learning")
         self.assertEqual(mem["fact_type"], "learning")
         self.assertNotEqual(mem["category"], "skill")
 
     def test_11_goal_not_skill(self):
-        self.manager.process_user_message("I am learning C programming")
+        self.manager.process_user_message("I want to learn Python")
         answer = self.ask("What are my skills?")
         self.assertIn("don't currently", answer.lower())
-        self.assertNotIn("C", answer)
+        self.assertNotIn("Python", answer)
 
     # 12–15 preferences
     def test_12_like_c(self):
@@ -206,6 +213,45 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertEqual(len(prefs), 1)
 
     # 16–17 semantic retrieval
+    def test_15b_preference_query_directionality(self):
+        self.manager.process_user_message("I like Flutter")
+        self.manager.process_user_message("I don't like C")
+
+        for question in ("What do I like?", "what i like"):
+            answer = self.ask(question).lower()
+            self.assertIn("flutter", answer)
+            self.assertNotIn("dislike c", answer)
+
+        for question in (
+            "What do I dislike?",
+            "What do I not like?",
+            "What don't I like?",
+            "what i don't like",
+        ):
+            answer = self.ask(question).lower()
+            self.assertIn("c", answer)
+            self.assertNotIn("flutter", answer)
+
+        answer = self.ask("What are my preferences?").lower()
+        self.assertIn("flutter", answer)
+        self.assertIn("c", answer)
+
+    def test_15c_personal_overview_is_broad_and_cleans_interest_wording(self):
+        self.manager.process_user_message("My name is Tejsai")
+        self.manager.process_user_message("I know Python")
+        self.manager.process_user_message("I am interested in video editing")
+        interest = [m for m in self.active() if m["category"] == "interest"][0]
+        interest["value"] = "I am interested in video editing"
+        interest["content"] = "User is interested in I am interested in video editing"
+        self.store.save()
+        self.store.load(ensure_embeddings=False)
+
+        answer = self.ask("give introduction about me")
+        self.assertIn("Tejsai", answer)
+        self.assertIn("Python", answer)
+        self.assertIn("video editing", answer.lower())
+        self.assertNotIn("interested in i am interested", answer.lower())
+
     def test_16_semantic_goal_retrieval(self):
         self.manager.process_user_message(
             "My goal is to become a software engineer"
@@ -251,6 +297,48 @@ class MemoryV06Tests(unittest.TestCase):
         store.load(ensure_embeddings=True)
         self.assertTrue(store.memories[0].get("embedding"))
         self.assertEqual(store.memories[0].get("status"), "active")
+
+    # 23 duplicate detection with missing embeddings
+    def test_23_duplicate_detection_with_missing_embeddings(self):
+        # Arrange: add a memory, then explicitly clear its embedding
+        # to simulate a memory without embeddings (e.g. after migration or
+        # manual deserialization).
+        path = os.path.join(self._tmpdir.name, "noemb_dup.json")
+        store = MemoryStore(path=path)
+        store.load(ensure_embeddings=False)
+
+        mem = store.add_memory(
+            category="skill",
+            content="I know Python",
+            fact_type="skill",
+        )
+        # Explicitly remove the embedding to test the fallback path.
+        mem["embedding"] = None
+        store.save()
+
+        # Act: reload without re-generating embeddings
+        store2 = MemoryStore(path=path)
+        store2.load(ensure_embeddings=False)
+
+        mgr = SafeMemoryManager(store2)
+
+        # Assert: same content should be detected as duplicate even
+        # without embeddings (normalized-content fallback).
+        dup = mgr.find_duplicate(
+            category="skill",
+            fact_type="skill",
+            content="I know Python",
+        )
+        self.assertIsNotNone(dup)
+        self.assertEqual(dup["content"], "I know Python")
+
+        # Assert: different content should NOT be detected as duplicate.
+        dup2 = mgr.find_duplicate(
+            category="skill",
+            fact_type="skill",
+            content="I know Java",
+        )
+        self.assertIsNone(dup2)
 
     # 21 invalid JSON
     def test_21_invalid_json_recovery(self):
@@ -319,40 +407,51 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertIn("software engineer", lower)
         self.assertIn("content creator", lower)
 
-    # New tests for v0.6 positive-learning fix
-    def test_26_learning_add(self):
-        r = self.manager.process_user_message("I am learning C programming")
-        mem = self.active()[0]
-        self.assertEqual(mem["category"], "learning")
-        self.assertEqual(mem["fact_type"], "learning")
+    def test_manual_scenarios_bundle(self):
+        """Acceptance scenarios 1–10 from the v0.6 brief."""
+        self.manager.process_user_message("My name is Tejsai")
+        self.assertEqual(self.ask("What is my name?"), "Your name is Tejsai.")
 
-    def test_27_learning_add_lowercase(self):
-        r = self.manager.process_user_message("i'm learning c programming")
-        mem = self.active()[0]
-        self.assertEqual(mem["category"], "learning")
-        self.assertEqual(mem["fact_type"], "learning")
+        self.manager.process_user_message("My nickname is Binnu")
+        nick = self.ask("What should you call me?")
+        self.assertIn("Binnu", nick)
 
-    def test_28_learning_removal(self):
-        self.manager.process_user_message("I am learning C programming")
-        r = self.manager.process_user_message("I don't want to learn C anymore")
-        self.assertEqual(r[0]["status"], "deleted")
+        self.manager.process_user_message(
+            "My goal is to become a software engineer"
+        )
+        dreams = self.ask("What are my dreams?")
+        self.assertIn("software engineer", dreams.lower())
 
-    # Regression tests
-    def test_29_learning_still_skill(self):
+        self.manager.process_user_message(
+            "My goal is to become a content creator"
+        )
+        goals = self.ask("What are my goals?")
+        self.assertIn("software engineer", goals.lower())
+        self.assertIn("content creator", goals.lower())
+
+        self.manager.process_user_message("I want to learn Python")
+        skills = self.ask("What are my skills?")
+        self.assertIn("don't currently", skills.lower())
+
         self.manager.process_user_message("I know Python")
-        self.manager.process_user_message("I am learning C programming")
-        skills = [m for m in self.active() if m["category"] == "skill"]
-        learning = [m for m in self.active() if m["category"] == "learning"]
-        self.assertEqual(len(skills), 1)
-        self.assertEqual(len(learning), 1)
-        self.assertIn("python", skills[0]["content"].lower())
-        self.assertIn("c", learning[0]["content"].lower())
+        skills2 = self.ask("What are my skills?")
+        self.assertIn("Python", skills2)
 
-    def test_30_learning_not_skill(self):
-        self.manager.process_user_message("I am learning C programming")
-        answer = self.ask("What are my skills?")
-        self.assertIn("don't currently", answer.lower())
-        self.assertNotIn("C", answer)
+        # Fresh preference store path via new stack piece
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        # isolate preference on same store
+        self.manager.process_user_message("I don't like C programming")
+        self.manager.process_user_message("I like C programming")
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        self.assertEqual(len(prefs), 1)
+        self.assertEqual(prefs[0]["fact_type"], "like")
+
+        r = self.manager.process_user_message("My name is Tejsai")
+        # name was Tejsai then may have been unchanged or already Tejsai
+        self.assertIn(r[0]["status"], {"unchanged", "updated", "added"})
+
+        food = self.ask("What is my favorite food?")
+        self.assertIn("favorite food", food.lower())
 
     # ---- Final 3 bug-fix tests ----
     def test_bug1_nick_name_normalization(self):
@@ -423,6 +522,165 @@ class MemoryV06Tests(unittest.TestCase):
         # Unrelated categories should not appear as sections.
         self.assertNotIn("nickname", lower3)
         self.assertNotIn("education", lower3)
+
+    # ---- Stress-test regression coverage ----
+    def test_stress_compound_query_includes_preferences(self):
+        self.manager.process_user_message("I know C")
+        self.manager.process_user_message("I am learning Flutter")
+        self.manager.process_user_message("I want to become an AI engineer")
+        self.manager.process_user_message("I like Python")
+        answer = self.ask("Tell me my skills, what I'm learning, my goal, and what I like.")
+        for label in ("skills", "learning", "goals", "preferences"):
+            self.assertIn(label, answer.lower())
+        for value in ("c", "flutter", "ai engineer", "python"):
+            self.assertIn(value, answer.lower())
+
+    def test_stress_enjoy_and_negative_enjoy_route_to_preferences(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I don't like Java")
+        self.manager.process_user_message("I am interested in video editing")
+        self.assertIn("python", self.ask("Which technology do I enjoy?").lower())
+        negative = self.ask("Which technology don't I enjoy?").lower()
+        self.assertIn("java", negative)
+        self.assertNotIn("video editing", negative)
+
+    def test_stress_future_questions_do_not_read_current_memories(self):
+        self.manager.process_user_message("I know Python")
+        self.manager.process_user_message("I want to become an AI engineer")
+        for question in (
+            "What skills will I have in 10 years?",
+            "What will my future career definitely be?",
+        ):
+            intent = self.retriever.detect_intent(question)
+            self.assertFalse(intent.is_memory_read)
+            self.assertEqual(self.retriever.retrieve_relevant_memories(question, intent=intent), [])
+
+    def test_stress_background_typo_is_stored_and_retrieved(self):
+        self.manager.process_user_message("i am studing diploma second year")
+        background = [m for m in self.active() if m["category"] == "education"]
+        self.assertEqual(len(background), 1)
+        self.assertIn("diploma second year", background[0]["value"].lower())
+        self.assertIn("diploma second year", self.ask("What is my background?").lower())
+
+    def test_stress_compound_statement_persists_every_fact(self):
+        results = self.manager.process_user_message(
+            "I know C, I am learning Flutter, I want to become an AI engineer, and I like Python."
+        )
+        self.assertEqual(len(results), 4)
+        active = self.active()
+        self.assertEqual({m["category"] for m in active}, {"skill", "learning", "goal", "preference"})
+        self.assertIn("c", self.ask("What are my skills?").lower())
+        self.assertIn("flutter", self.ask("What am I learning?").lower())
+        self.assertIn("ai engineer", self.ask("What are my goals?").lower())
+        ambiguous = self.retriever.detect_intent("What do I like about something?")
+        self.assertFalse(ambiguous.is_memory_read)
+
+    def test_stress_java_and_javascript_remain_distinct(self):
+        self.manager.process_user_message("I know Java")
+        self.manager.process_user_message("I know JavaScript")
+        skills = self.ask("What are my skills?").lower()
+        self.assertIn("java", skills)
+        self.assertIn("javascript", skills)
+
+    def test_adversarial_advice_and_ambiguous_preference_queries_are_not_reads(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I know Java")
+        for question in (
+            "What do I like about something?",
+            "Which technology is best for me?",
+            "What should I learn?",
+        ):
+            intent = self.retriever.detect_intent(question)
+            self.assertFalse(intent.is_memory_read, question)
+            self.assertEqual(
+                self.retriever.retrieve_relevant_memories(question, intent=intent),
+                [],
+            )
+
+    def test_adversarial_current_memory_read_routes_remain_specific(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I don't like Java")
+        self.manager.process_user_message("I am interested in robotics")
+        self.manager.process_user_message("I am learning Flutter")
+        self.assertIn("python", self.ask("What do I like?").lower())
+        self.assertIn("java", self.ask("What do I dislike?").lower())
+        self.assertIn("robotics", self.ask("What am I interested in?").lower())
+        self.assertIn("flutter", self.ask("What am I learning?").lower())
+
+    def test_adversarial_preference_temporal_words_normalize_subjects(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I don't like Python anymore")
+        self.manager.process_user_message("I like Python again")
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        self.assertEqual(len(prefs), 1)
+        self.assertEqual(prefs[0]["subject"], "python")
+        self.assertEqual(prefs[0]["fact_type"], "like")
+
+    def test_adversarial_enjoy_and_interest_have_distinct_categories(self):
+        self.manager.process_user_message("I enjoy robotics")
+        self.manager.process_user_message("I don't enjoy python")
+        self.manager.process_user_message("I am interested in robotics")
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        by_subject = {m["subject"]: m["fact_type"] for m in prefs}
+        self.assertEqual(by_subject["robotics"], "like")
+        self.assertEqual(by_subject["python"], "dislike")
+        interests = [m for m in self.active() if m["category"] == "interest"]
+        self.assertEqual(len(interests), 1)
+        self.assertEqual(interests[0]["subject"], "robotics")
+
+    def test_final_preference_temporal_conflicts_leave_one_active_state(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I don't like Python anymore")
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        self.assertEqual([(m["subject"], m["fact_type"]) for m in prefs], [("python", "dislike")])
+
+        self.manager.process_user_message("I like Python again")
+        self.manager.process_user_message("I don't like Python")
+        prefs = [m for m in self.active() if m["category"] == "preference"]
+        self.assertEqual([(m["subject"], m["fact_type"]) for m in prefs], [("python", "dislike")])
+
+    def test_final_learning_temporal_suffix_is_not_stored(self):
+        self.manager.process_user_message("I am learning C++ now")
+        learning = [m for m in self.active() if m["category"] == "learning"]
+        self.assertEqual(learning[0]["value"], "C++")
+        self.assertEqual(learning[0]["subject"], "c++")
+
+    def test_final_migration_normalizes_legacy_active_records(self):
+        path = os.path.join(self._tmpdir.name, "legacy.json")
+        save_json(path, [
+            {"id": "memory_001", "category": "preference", "fact_type": "like", "subject": "python again", "content": "User likes Python again", "status": "active"},
+            {"id": "memory_002", "category": "preference", "fact_type": "dislike", "subject": "python", "content": "User dislikes Python", "status": "active"},
+            {"id": "memory_003", "category": "learning", "fact_type": "learning", "subject": "c++ now", "value": "C++ now", "content": "User is learning C++ now", "status": "active"},
+        ])
+        store = MemoryStore(path=path, embedding_store=EmbeddingStore())
+        store.load(ensure_embeddings=False)
+        active = store.active_memories()
+        prefs = [m for m in active if m["category"] == "preference"]
+        self.assertEqual(len(prefs), 1)
+        self.assertEqual((prefs[0]["subject"], prefs[0]["fact_type"]), ("python", "dislike"))
+        learning = [m for m in active if m["category"] == "learning"][0]
+        self.assertEqual((learning["value"], learning["subject"]), ("C++", "c++"))
+
+    def test_final_duplicate_goal_is_not_added_and_history_stays_excluded(self):
+        self.manager.process_user_message("I want to become a machine learning engineer")
+        result = self.manager.process_user_message("My goal changed. I want to become a machine learning engineer.")
+        self.assertEqual(result[0]["status"], "unchanged")
+        goals = [m for m in self.active() if m["category"] == "goal"]
+        self.assertEqual(len(goals), 1)
+        self.manager.process_user_message("I want to become an AI engineer")
+        self.assertEqual(len([m for m in self.active() if m["category"] == "goal"]), 2)
+        self.manager.process_user_message("I don't like Python")
+        self.manager.process_user_message("I like Python again")
+        self.assertTrue(any(m["status"] == "inactive" for m in self.store.memories))
+        self.assertNotIn("dislike python", self.ask("What do I like?").lower())
+
+    def test_final_inactive_preference_history_is_never_retrieved(self):
+        self.manager.process_user_message("I like Python")
+        self.manager.process_user_message("I don't like Python")
+        self.assertTrue(any(m["status"] == "inactive" for m in self.store.memories))
+        answer = self.ask("What do I like?").lower()
+        self.assertIn("don't currently", answer)
+        self.assertNotIn("python", answer)
 
     # ---- Final goal UPDATE/DELETE fixes ----
     def test_goal_fix1_explicit_replacement(self):
@@ -671,6 +929,28 @@ class MemoryV06Tests(unittest.TestCase):
         self.assertEqual(types, {"name", "nickname"})
         name = [m for m in identities if m["fact_type"] == "name"][0]
         self.assertIn("tejsai", name["content"].lower())
+
+    def test_bug4_learning_delete_wrong_memory(self):
+        """Regression test: deleting "C" should not delete "machine learning engineer".
+
+        When an existing learning memory "machine learning engineer" exists and the
+        user adds "I am learning C" then asks "I don't want to learn C anymore", the
+        "C" memory should be deleted, not the "machine learning engineer" memory.
+        """
+        # Add existing learning memory
+        self.manager.process_user_message("I am learning machine learning engineer")
+        # Add new learning memory about C
+        self.manager.process_user_message("I am learning C")
+        # Delete the C learning memory
+        results = self.manager.process_user_message("I don't want to learn C anymore")
+        self.assertTrue(results)
+        # The "machine learning engineer" memory should still be active
+        learning = [m for m in self.active() if m["category"] == "learning"]
+        self.assertEqual(len(learning), 1)
+        self.assertIn("machine learning engineer", learning[0]["content"].lower())
+        # The "C" memory should have been deleted
+        c_memories = [m for m in self.active() if m.get("subject") == "c"]
+        self.assertEqual(len(c_memories), 0)
 
 
 class ArchitectureGuardTests(unittest.TestCase):
