@@ -6,6 +6,29 @@ import re
 from typing import Optional
 
 
+# Normalization map for common typos that change semantic meaning.
+# Keys are normalized (canonical) values; entries are sets of typos.
+_CANONICAL_WORDS = {
+    "nothing": {"noting", "nothign", "noting"},
+    "something": {"somthing", "smething"},
+    "anything": {"anythign", "anyting"},
+    "everything": {"everythign", "evrything"},
+}
+
+
+def _normalize_goal_value(word: str) -> str:
+    """Normalize a single goal word, correcting obvious typos.
+
+    Returns the canonical form if the word is a known typo,
+    otherwise returns the original word unchanged.
+    """
+    lower = word.lower().strip()
+    for canonical, typos in _CANONICAL_WORDS.items():
+        if lower in typos or lower == canonical:
+            return canonical
+    return lower
+
+
 CHANGE_SIGNAL_PHRASES = (
     "my goal changed",
     "i changed my goal",
@@ -77,6 +100,15 @@ DELETE_PATTERNS = (
     r"\bi\s+stopped\s+learning\b",
 )
 
+# Negated / cancellation patterns for temporary statements.
+# Must be checked BEFORE is_temporary_message to avoid silent dropping.
+TASK_CANCEL_PATTERNS = (
+    r"\bi\s+(?:don'?t|do\s+not|no\s+longer)\s+have\b",
+    r"\b(?:cancel|forget|drop)\s+(?:my|the|an?)\b",
+    r"\bno\s+(?:longer\s+)?(?:have|need)\s+(?:a|an|the|my|any)\b",
+    r"\bthere\s+is\s+no\b",
+)
+
 
 def has_explicit_change_signal(message: str) -> bool:
     lower = message.lower()
@@ -89,13 +121,17 @@ def is_temporary_message(message: str) -> bool:
         return True
 
     # Time-bounded statements describe a temporary state, not a durable fact.
-    # v0.6 deliberately leaves them out of long-term memory rather than storing
-    # a record that would need a scheduler-driven expiry lifecycle.
+    # Matches: "until tomorrow", "have X tomorrow", "have X next week", etc.
+    # Also handles common misspellings like "tommorrow".
     return bool(
         re.search(
-            r"\b(?:until|till|through)\s+(?:(?:next|this)\s+)?"
-            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
-            r"tomorrow|tonight|the\s+end\s+of\s+(?:the\s+)?(?:day|week|month)|\d)",
+            r"(?:\b(?:until|till|through)\b"
+            r"|\bhave\b.*?\b(?:tomorrow|tommorrow|tonight|today)\b"
+            r"|\bhave\b.*?\b(?:next|this)\s+(?:week|month|monday|tuesday|"
+            r"wednesday|thursday|friday|saturday|sunday)\b"
+            r"|\bhave\b.*?\b(?:exam|test|quiz|deadline|appointment|interview)\b"
+            r".*?\b(?:tomorrow|tommorrow|tonight|today|next|this)\b"
+            r")",
             lower,
             flags=re.IGNORECASE,
         )
@@ -645,22 +681,6 @@ def normalize_goal_text(content: str) -> str:
     return " ".join(words)
 
 
-def strip_temporal_suffix(value: str) -> str:
-    """Remove trailing state-change words from a stored fact's topic."""
-    value = (value or "").strip()
-    # Strip trailing temporal words and preceding prepositions (in/the)
-    value = re.sub(
-        r"\s*(?:in|the)?\s*(?:again|anymore|now|currently|today|still|future)\s*$",
-        "",
-        value,
-        flags=re.IGNORECASE,
-    )
-    # Strip if the entire value is a temporal word
-    if value.lower() in {"again", "anymore", "now", "currently", "today", "still", "future"}:
-        return ""
-    return value
-
-
 class MemoryExtractor:
     """
     Detect durable personal facts from a user message.
@@ -674,8 +694,16 @@ class MemoryExtractor:
         if not text or looks_like_question(text):
             return []
 
+        # Task cancellation must be checked BEFORE is_temporary_message
+        # to avoid silently dropping negated forms like
+        # "I don't have any task tomorrow".
+        if self._is_task_cancellation(text):
+            cancel_op = self._extract_task_cancellation(text)
+            return [cancel_op] if cancel_op else []
+
         if is_temporary_message(text):
-            return []
+            task_op = self._extract_task(text)
+            return [task_op] if task_op else []
 
         # Do not treat another person's quoted first-person statement as the
         # user's own durable fact.
@@ -745,7 +773,10 @@ class MemoryExtractor:
                 self._extract_skill_or_interest,
                 self._extract_name,
                 self._extract_goal,
-self._extract_education,
+                self._extract_education,
+                self._extract_ambition,
+                self._extract_dream,
+                self._extract_priority,
             ):
                 operation = extractor(clause)
                 if not operation:
@@ -923,6 +954,10 @@ self._extract_education,
                 # Allow single-token subjects such as "C".
                 if len(subject) == 1 and not subject.isalnum():
                     return None
+                # Reject universal/vague expressions that do not name a real
+                # preference subject (e.g. "I don't like anything").
+                if subject.lower() in {"anything", "nothing", "something", "everything"}:
+                    return None
                 content = f"User dislikes {subject}"
                 return {
                     "action": "UPSERT",
@@ -952,6 +987,10 @@ self._extract_education,
                 # Allow single-token subjects such as "C".
                 if len(subject) == 1 and not subject.isalnum():
                     return None
+                # Reject universal/vague expressions that do not name a real
+                # preference subject (e.g. "I like nothing").
+                if subject.lower() in {"anything", "nothing", "something", "everything"}:
+                    return None
                 content = f"User likes {subject}"
                 return {
                     "action": "UPSERT",
@@ -967,12 +1006,31 @@ self._extract_education,
         return None
 
     def _extract_goal(self, text: str) -> Optional[dict]:
-        # "I also want to build..." may be project rather than career goal.
-        build_match = re.search(
-            r"\bi(?:\s+also)?\s+want to build\s+(.+)",
-            text,
+        # Normalize common action-verb typos so build_match can catch them.
+        normalized = text
+        normalized = re.sub(r"\bbulid\b", "build", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bdevelope\b", "develop", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bcreaet\b", "create", normalized, flags=re.IGNORECASE)
+        # "I want to become build X" is malformed; normalize to "I want to build X".
+        normalized = re.sub(
+            r"\b(?:want to|wanna)\s+become\s+(build|create|develop|make|design|write|code)\b",
+            r"want to \1",
+            normalized,
             flags=re.IGNORECASE,
         )
+
+        # "I want to build..." / "I am building..." / "I am creating..." may be project.
+        build_match = re.search(
+            r"\bi(?:\s+also)?\s+want to build\s+(.+)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not build_match:
+            build_match = re.search(
+                r"\bi\s+(?:am|'m)\s+(?:building|creating|developing)\s+(.+)",
+                normalized,
+                flags=re.IGNORECASE,
+            )
         if build_match:
             project = build_match.group(1).strip().rstrip(".!?")
             if len(project) >= 3:
@@ -986,10 +1044,11 @@ self._extract_education,
                     "importance": "medium",
                 }
 
+        # NOTE: ambition and dream are handled by _extract_ambition and
+        # _extract_dream respectively, called before this method in extract().
+
         goal_patterns = [
-            r"\bmy goal is to\s+(.+)",
-            r"\bmy dream is to\s+(.+)",
-            r"\bi dream of\s+(.+)",
+            r"\bmy (?:main |primary )?goal is to\s+(.+)",
             r"\bi aim to\s+(.+)",
             r"\bi plan to\s+(.+)",
             r"\bi hope to(?:\s+become|\s+be)?\s+(.+)",
@@ -999,7 +1058,7 @@ self._extract_education,
             r"\bi(?:\s+also)?\s+want to\s+(.+)",
         ]
         for pattern in goal_patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
             if match:
                 goal = match.group(1).strip().rstrip(".!?")
                 if len(goal) < 3:
@@ -1024,7 +1083,7 @@ self._extract_education,
                 )
                 if become or re.search(
                     r"want to become|want to be|goal is to become|dream is to",
-                    text,
+                    normalized,
                     flags=re.IGNORECASE,
                 ):
                     target = become.group(1) if become else goal
@@ -1038,6 +1097,22 @@ self._extract_education,
 
                 # "want to learn …" is handled as learning, not career goal.
                 if re.search(r"\blearn\b", goal, flags=re.IGNORECASE):
+                    continue
+
+                # Goals whose extracted value starts with an action verb
+                # (build, create, develop, etc.) are projects, not goals.
+                # Also reject "become build/create/..." which is malformed.
+                if re.match(
+                    r"^(?:build|create|develop|make|design|write|code)\b",
+                    goal,
+                    flags=re.IGNORECASE,
+                ):
+                    continue
+                if re.match(
+                    r"^become\s+(?:build|create|develop|make|design|write|code)\b",
+                    goal,
+                    flags=re.IGNORECASE,
+                ):
                     continue
 
                 value = re.sub(
@@ -1057,6 +1132,11 @@ self._extract_education,
                     return None
                 if value_lower in {"again", "anymore", "now", "currently", "today", "still", "future"}:
                     return None
+                # Reject universal/vague pronouns that do not express a real goal.
+                # Use normalization to catch common typos like "noting" → "nothing".
+                normalized = _normalize_goal_value(value_lower)
+                if normalized in {"nothing", "something", "anything", "everything"}:
+                    return None
                 # Also reject temporal phrases like "in future" where the
                 # extracted value consists of a preposition + temporal noun.
                 words = value_lower.split()
@@ -1075,24 +1155,313 @@ self._extract_education,
         return None
 
     def _extract_education(self, text: str):
-        """Extract education/background facts such as "I am studing diploma second year".
+        """Extract education/background facts.
+
+        Handles formal education statements like:
+        - "I am in diploma second year"
+        - "I am pursuing B.Tech in computer science"
+        - "I study at university"
         """
-        pattern = r"\bi am\s+(?:studing|studying)\s+(.+)"
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            content = match.group(1).strip().rstrip(".!?")
-            if len(content) >= 2:
+        # Explicit education context patterns
+        education_patterns = [
+            # "I am in diploma/degree X year"
+            r"\bi\s+(?:am\s+in|study\s+in|pursuing)\s+(.+?)[.!?]?$",
+            # "I study at ..."
+            r"\bi\s+study\s+(?:at|in)\s+(.+?)[.!?]?$",
+            # "My education is ..."
+            r"\bmy\s+(?:education|course|degree|diploma)\s+is\s+(.+?)[.!?]?$",
+        ]
+        for pattern in education_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                detail = match.group(1).strip().rstrip(".!?")
+                if len(detail) >= 2:
+                    content = f"User is studying {detail}"
+                    return {
+                        "action": "ADD",
+                        "category": "education",
+                        "fact_type": "education",
+                        "content": content,
+                        "value": detail,
+                        "subject": normalize_topic_subject(detail),
+                        "importance": "high",
+                    }
+        return None
+
+    def _extract_ambition(self, text: str) -> Optional[dict]:
+        """Extract ambition statements — professional aspirations."""
+        ambition_patterns = [
+            r"\bmy ambition is to\s+(.+)",
+            r"\bi ambition to\s+(.+)",
+            r"\bmy ambition is\s+(.+)",
+            r"\bi aspire to\s+(.+)",
+        ]
+        for pattern in ambition_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                goal = match.group(1).strip().rstrip(".!?")
+                if len(goal) < 3:
+                    continue
+                content = f"User's ambition is to {goal}"
+                value = strip_goal_filler(goal)
                 return {
                     "action": "ADD",
-                    "category": "education",
-                    "fact_type": "education",
-                    "content": f"User is educated in {content}",
-                    "value": content,
-                    "subject": content,
-                    "importance": "medium",
+                    "category": "ambition",
+                    "fact_type": "ambition",
+                    "content": content,
+                    "value": value,
+                    "subject": normalize_goal_text(content),
+                    "importance": "high",
                 }
         return None
 
+    def _extract_dream(self, text: str) -> Optional[dict]:
+        """Extract dream/aspiration statements."""
+        dream_patterns = [
+            r"\bmy dream is to\s+(.+)",
+            r"\bi dream of\s+(.+)",
+            r"\bi dream to\s+(.+)",
+            r"\bmy dream is\s+(.+)",
+        ]
+        for pattern in dream_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                goal = match.group(1).strip().rstrip(".!?")
+                if len(goal) < 3:
+                    continue
+                content = f"User's dream is to {goal}"
+                value = strip_goal_filler(goal)
+                return {
+                    "action": "ADD",
+                    "category": "dream",
+                    "fact_type": "dream",
+                    "content": content,
+                    "value": value,
+                    "subject": normalize_goal_text(content),
+                    "importance": "high",
+                }
+        return None
+
+    def _extract_priority(self, text: str) -> Optional[dict]:
+        """Extract explicit priority statements.
+
+        Matches patterns like:
+        - "My main goal is to get a good rank in ECET" → priority + goal
+        - "Actually, my current main priority is ECET" → priority update
+        - "My top priority is ECET" → priority
+        """
+        # "my main goal is X" → store as goal + set priority
+        main_goal_match = re.search(
+            r"\bmy (?:main|primary|top)\s+goal is to\s+(.+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if main_goal_match:
+            goal_text = main_goal_match.group(1).strip().rstrip(".!?")
+            if len(goal_text) >= 3:
+                # This is handled by _extract_goal; we just flag it as priority
+                # The goal extraction will create the goal, and we add priority here
+                return {
+                    "action": "ADD",
+                    "category": "priority",
+                    "fact_type": "priority",
+                    "content": f"User's current main priority is {goal_text}",
+                    "value": goal_text,
+                    "importance": "high",
+                    "linked_category": "goal",
+                }
+
+        # "my current main priority is X" → priority update
+        priority_match = re.search(
+            r"\bmy\s+(?:current\s+)?(?:main|primary|top)\s+priority is\s+(.+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if priority_match:
+            topic = priority_match.group(1).strip().rstrip(".!?")
+            if len(topic) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "priority",
+                    "fact_type": "priority",
+                    "content": f"User's current main priority is {topic}",
+                    "value": topic,
+                    "importance": "high",
+                }
+
+        return None
+
+    def _extract_task(self, text: str) -> Optional[dict]:
+        """Extract temporary event/task with time reference.
+
+        Matches patterns like:
+        - "i have ct exam tomorrow"
+        - "i have a test next week"
+        - "i have an appointment today"
+        - "i have deadline friday"
+        """
+        lower = text.lower()
+
+        # Match "have X [time reference]" patterns
+        task_match = re.search(
+            r"\b(?:i\s+)?(?:have|got|hav?e)\s+(?:an?\s+)?(.+?)"
+            r"\s+(?:tomorrow|tommorrow|tonight|today|"
+            r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+            lower,
+            flags=re.IGNORECASE,
+        )
+        if not task_match:
+            return None
+
+        event_text = task_match.group(1).strip().rstrip(".!?")
+        if len(event_text) < 2:
+            return None
+
+        # Extract time reference for expiration
+        time_ref = re.search(
+            r"\b(tomorrow|tommorrow|tonight|today|"
+            r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+            lower,
+            flags=re.IGNORECASE,
+        )
+        temporal_hint = time_ref.group(1) if time_ref else None
+
+        content = f"User has {event_text} {temporal_hint or ''}".strip()
+        return {
+            "action": "ADD",
+            "category": "task",
+            "fact_type": "task",
+            "content": content,
+            "value": event_text,
+            "subject": event_text,
+            "importance": "medium",
+            "temporal_hint": temporal_hint,
+        }
+
+    @staticmethod
+    def _is_task_cancellation(text: str) -> bool:
+        """Return True if the message is a negated task or cancellation request.
+
+        Must be checked BEFORE is_temporary_message to avoid dropping
+        cancellations like "I don't have any task tomorrow".
+        """
+        lower = text.lower()
+        return any(re.search(pat, lower) for pat in TASK_CANCEL_PATTERNS)
+
+    def _extract_task_cancellation(self, text: str) -> Optional[dict]:
+        """Extract a task-cancellation operation.
+
+        Matches negated task statements and returns a CANCEL action that
+        the manager can use to deactivate the matching active task.
+        """
+        lower = text.lower()
+
+        # Extract the event noun phrase (e.g. "exam", "ct exam", "task")
+        cancel_match = re.search(
+            r"(?:don'?t|do\s+not|no\s+longer)\s+have\s+(?:an?\s+)?(.+?)"
+            r"\s+(?:tomorrow|tommorrow|tonight|today|"
+            r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+            lower,
+            flags=re.IGNORECASE,
+        )
+        if cancel_match:
+            event_text = cancel_match.group(1).strip().rstrip(".!?")
+            time_ref = re.search(
+                r"(tomorrow|tommorrow|tonight|today|"
+                r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+                r"friday|saturday|sunday)|"
+                r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+                r"friday|saturday|sunday)|"
+                r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+                lower,
+                flags=re.IGNORECASE,
+            )
+            temporal_hint = time_ref.group(1) if time_ref else None
+            if len(event_text) >= 2:
+                return {
+                    "action": "CANCEL",
+                    "category": "task",
+                    "fact_type": "task",
+                    "value": event_text,
+                    "temporal_hint": temporal_hint,
+                }
+
+        # Generic cancellation: "cancel my exam", "forget my task", "drop the quiz"
+        generic_cancel = re.search(
+            r"(?:cancel|forget|drop)\s+(?:my|the|an?)\s+(.+?)(?:\.|$)",
+            lower,
+            flags=re.IGNORECASE,
+        )
+        if generic_cancel:
+            event_text = generic_cancel.group(1).strip().rstrip(".!?")
+            if len(event_text) >= 2:
+                return {
+                    "action": "CANCEL",
+                    "category": "task",
+                    "fact_type": "task",
+                    "value": event_text,
+                    "temporal_hint": None,
+                }
+
+        # "there is no X tomorrow"
+        there_no_match = re.search(
+            r"there\s+is\s+no\s+(.+?)"
+            r"\s+(?:tomorrow|tommorrow|tonight|today|"
+            r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)|"
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+            lower,
+            flags=re.IGNORECASE,
+        )
+        if there_no_match:
+            event_text = there_no_match.group(1).strip().rstrip(".!?")
+            time_ref = re.search(
+                r"(tomorrow|tommorrow|tonight|today|"
+                r"next\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+                r"friday|saturday|sunday)|"
+                r"this\s+(?:week|month|monday|tuesday|wednesday|thursday|"
+                r"friday|saturday|sunday)|"
+                r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+                lower,
+                flags=re.IGNORECASE,
+            )
+            temporal_hint = time_ref.group(1) if time_ref else None
+            if len(event_text) >= 2:
+                return {
+                    "action": "CANCEL",
+                    "category": "task",
+                    "fact_type": "task",
+                    "value": event_text,
+                    "temporal_hint": temporal_hint,
+                }
+
+        # Fallback: if we detected a cancellation pattern but couldn't parse
+        # the event, still return a CANCEL with the full text as value so the
+        # manager can do fuzzy matching against active tasks.
+        if any(re.search(pat, lower) for pat in TASK_CANCEL_PATTERNS):
+            return {
+                "action": "CANCEL",
+                "category": "task",
+                "fact_type": "task",
+                "value": text.strip().rstrip(".!?"),
+                "temporal_hint": None,
+            }
+
+        return None
 
     def _extract_skill_or_interest(self, text: str):
         """Return one op dict, a list of ops, or None."""
@@ -1134,9 +1503,9 @@ self._extract_education,
                     "importance": "medium",
                 }
 
-        # Learning status (not a completed skill).
+        # Active learning status — "I am learning X" maps to learning category.
         learn_status_match = re.search(
-            r"\bi(?:'m| am)\s+learning\s+(.+)",
+            r"\bi(?:'m| am)\s+(?:learning|studing|studying)\s+(.+)",
             text,
             flags=re.IGNORECASE,
         )
@@ -1144,6 +1513,25 @@ self._extract_education,
             topic = learn_status_match.group(1).strip().rstrip(".!?")
             topic = strip_temporal_suffix(topic)
             if len(topic) >= 1:
+                # Check for formal education context signals in the topic
+                formal_signals = re.search(
+                    r"\b(diploma|degree|course|college|university|school|"
+                    r"bachelor|master|phd|b\.?tech|m\.?tech|engineering|"
+                    r"computer science|cs|ecet|first year|second year|"
+                    r"third year|fourth year|semester|year)\b",
+                    topic,
+                    flags=re.IGNORECASE,
+                )
+                if formal_signals:
+                    return {
+                        "action": "ADD",
+                        "category": "education",
+                        "fact_type": "studying",
+                        "content": f"User is studying {topic}",
+                        "value": topic,
+                        "subject": normalize_topic_subject(topic),
+                        "importance": "high",
+                    }
                 return {
                     "action": "ADD",
                     "category": "learning",

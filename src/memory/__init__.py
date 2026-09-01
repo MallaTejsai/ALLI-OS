@@ -1,4 +1,4 @@
-"""ALLI v0.5 semantic memory package."""
+"""ALLI v0.6 semantic memory package."""
 
 from .config import (
     CHAT_MODEL,
@@ -11,7 +11,7 @@ from .extractor import MemoryExtractor
 from .manager import SafeMemoryManager
 from .query_intent import QueryIntentDetector
 from .retriever import MemoryRetriever
-from .store import MemoryStore, load_json_list, save_json
+from .store import MemoryStore, compute_expires_at, is_expired, load_json_list, save_json
 
 __all__ = [
     "CHAT_MODEL",
@@ -26,6 +26,8 @@ __all__ = [
     "QueryIntentDetector",
     "MemoryRetriever",
     "MemoryStore",
+    "compute_expires_at",
+    "is_expired",
     "load_json_list",
     "save_json",
 ]

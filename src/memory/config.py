@@ -46,22 +46,34 @@ VALID_CATEGORIES = frozenset({
     "identity",
     "education",
     "goal",
+    "ambition",
+    "dream",
     "interest",
     "preference",
     "skill",
     "learning",
     "project",
     "routine",
+    "task",
+    "priority",
     "other",
 })
 
-VALID_IMPORTANCE = frozenset({"high", "medium", "low"})
-VALID_STATUS = frozenset({"active", "inactive"})
+VALID_IMPORTANCE = frozenset({"high", "medium", "low", "critical"})
+VALID_STATUS = frozenset({"active", "inactive", "expired"})
 
 IMPORTANCE_SCORES = {
-    "high": 1.0,
+    "critical": 1.0,
+    "high": 0.85,
     "medium": 0.6,
     "low": 0.25,
 }
 
 UNIQUE_IDENTITY_FACT_TYPES = frozenset({"name", "nickname"})
+
+# Priority tracking: explicit user priority signals
+PRIORITY_KEYWORDS = frozenset({
+    "main priority", "current priority", "top priority",
+    "most important", "currently", "right now",
+    "primary focus", "main focus",
+})

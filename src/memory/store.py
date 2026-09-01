@@ -6,7 +6,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from . import config
@@ -15,6 +15,95 @@ from .embeddings import EmbeddingError, EmbeddingStore
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def parse_iso_timestamp(ts: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp string, returning None for invalid values."""
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return None
+
+
+def compute_expires_at(temporal_hint: Optional[str]) -> Optional[str]:
+    """Compute an expiration timestamp from a natural-language temporal hint.
+
+    Supports: tomorrow, tonight, <day_of_week>, "by Friday", "in N days/hours",
+    and absolute ISO dates.  Returns None when no valid expiration can be computed.
+    """
+    if not temporal_hint:
+        return None
+
+    hint = temporal_hint.strip().lower()
+    now = utc_now()
+
+    # Relative: "tomorrow"
+    if hint in ("tomorrow",):
+        expires = now + timedelta(days=1)
+        return expires.replace(hour=23, minute=59, second=59).isoformat()
+
+    # Relative: "tonight"
+    if hint in ("tonight",):
+        expires = now.replace(hour=23, minute=59, second=59)
+        return expires.isoformat()
+
+    # Relative: "in N days"
+    match = re.match(r"in\s+(\d+)\s+days?", hint)
+    if match:
+        days = int(match.group(1))
+        expires = now + timedelta(days=days)
+        return expires.replace(hour=23, minute=59, second=59).isoformat()
+
+    # Relative: "in N hours"
+    match = re.match(r"in\s+(\d+)\s+hours?", hint)
+    if match:
+        hours = int(match.group(1))
+        expires = now + timedelta(hours=hours)
+        return expires.isoformat()
+
+    # Day of week: "friday", "next monday", etc.
+    day_map = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+    match = re.match(r"(?:next\s+)?(\w+)", hint)
+    if match and match.group(1) in day_map:
+        target_weekday = day_map[match.group(1)]
+        days_ahead = (target_weekday - now.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        if "next" in hint:
+            days_ahead = 7 + (target_weekday - now.weekday()) % 7
+            if days_ahead == 7:
+                days_ahead = 14
+        expires = now + timedelta(days=days_ahead)
+        return expires.replace(hour=23, minute=59, second=59).isoformat()
+
+    # Absolute ISO date
+    try:
+        parsed = datetime.fromisoformat(hint)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def is_expired(memory: dict) -> bool:
+    """Check whether a memory's expiration time has passed."""
+    expires_at = memory.get("expires_at")
+    if not expires_at:
+        return False
+    expires_dt = parse_iso_timestamp(expires_at)
+    if expires_dt is None:
+        return False
+    return utc_now() > expires_dt
 
 
 def save_json(path: str, data: Any) -> None:
@@ -109,11 +198,23 @@ def infer_fact_type(category: str, content: str) -> str:
         return "identity_other"
 
     if category == "goal":
-        if re.search(r"\blearn\b|\blearning\b", text):
+        # Only classify as learning_goal when "learn/learning" is the primary
+        # action verb — not when it appears inside compound nouns like
+        # "machine learning engineer".
+        if re.search(
+            r"\bwants?\s+to\s+learn\b|\bis\s+learning\b|\bto\s+learn\b",
+            text,
+        ):
             return "learning_goal"
         if re.search(r"\bbuild\b|\bproject\b", text):
             return "project_goal"
         return "career_goal"
+
+    if category == "ambition":
+        return "ambition"
+
+    if category == "dream":
+        return "dream"
 
     if category == "learning":
         return "learning"
@@ -149,6 +250,8 @@ def infer_fact_type(category: str, content: str) -> str:
             return "college"
         if "course" in text or "diploma" in text:
             return "course"
+        if "studying" in text:
+            return "studying"
         return "education"
 
     if category == "skill":
@@ -159,6 +262,8 @@ def infer_fact_type(category: str, content: str) -> str:
         return "project"
     if category == "routine":
         return "habit"
+    if category == "task":
+        return "task"
     return "other"
 
 
@@ -251,7 +356,8 @@ def extract_memory_subject(
         return normalize_preference_subject(subject)
 
     if category in {
-        "goal", "skill", "interest", "learning", "project", "education", "routine"
+        "goal", "ambition", "dream", "skill", "interest", "learning",
+        "project", "education", "routine", "task",
     }:
         text = value or content
         text = re.sub(
@@ -274,11 +380,11 @@ def extract_memory_subject(
 def default_importance_for(category: str, fact_type: str) -> str:
     if category in {"identity", "education"}:
         return "high"
-    if category == "goal":
+    if category in {"goal", "ambition", "dream"}:
         return "high"
     if fact_type in {"name", "nickname"}:
         return "high"
-    if category in {"skill", "interest", "learning", "project", "preference", "routine"}:
+    if category in {"skill", "interest", "learning", "project", "preference", "routine", "task"}:
         return "medium"
     return "medium"
 
@@ -317,17 +423,25 @@ def build_embedding_text(
                 "necessarily know yet"
             ),
             "career_goal": (
-                "life and career goals; dreams ambitions aims; what the user "
+                "life and career goals; what the user "
                 "wants to become or achieve"
             ),
             "project_goal": (
                 "goal to build or create something; project ambition"
             ),
             "default": (
-                "personal goals dreams ambitions aims; what the user wants "
+                "personal goals aims; what the user wants "
                 "to become or achieve"
             ),
         },
+        "ambition": (
+            "personal ambitions; professional aspirations and drive; "
+            "what the user aims to achieve in their career or life"
+        ),
+        "dream": (
+            "personal dreams and aspirations; long-term visions; "
+            "what the user dreams of becoming or achieving"
+        ),
         "preference": (
             "personal preferences likes dislikes enjoy hate"
         ),
@@ -340,9 +454,16 @@ def build_embedding_text(
             "learning progress distinct from completed skills"
         ),
         "interest": "personal interests hobbies",
-        "education": "education college course major studying school background",
+        "education": (
+            "formal education background; college course diploma degree "
+            "studying school academic history"
+        ),
         "project": "personal projects building creating",
         "routine": "personal routines habits schedule",
+        "task": (
+            "temporary tasks and to-dos; time-bound activities; "
+            "things the user needs to do soon"
+        ),
         "other": "personal durable memory about the user",
     }
 
@@ -450,18 +571,16 @@ class MemoryStore:
                 )
                 changed = True
             else:
-                # Correct clearly wrong goal subtypes after earlier migrations.
+                # Correct clearly wrong preference subtypes after earlier
+                # migrations.  Goal subtypes are NOT re-inferred here because
+                # infer_fact_type can produce false positives from compound
+                # nouns (e.g. "machine learning engineer" contains "learning"
+                # but is a career goal, not a learning goal).  The extractor
+                # always sets goal fact_types correctly.
                 inferred = infer_fact_type(
                     memory.get("category", "other"),
                     memory.get("content", ""),
                 )
-                if (
-                    memory.get("category") == "goal"
-                    and inferred == "learning_goal"
-                    and memory.get("fact_type") != "learning_goal"
-                ):
-                    memory["fact_type"] = "learning_goal"
-                    changed = True
                 if (
                     memory.get("category") == "preference"
                     and inferred in {"like", "dislike"}
@@ -588,6 +707,34 @@ class MemoryStore:
                 memory["embedding_version"] = config.EMBEDDING_TEXT_VERSION
                 changed = True
 
+        # Deactivate stale learning records whose content is actually a job
+        # title (e.g. "User is learning a machine learning engineer").  These
+        # were created by the old v0.6 bug where compound nouns containing
+        # "learning" were misclassified as learning facts.  A learning fact
+        # should describe a topic the user is studying, not a career role.
+        _JOB_TITLE_SUFFIXES = re.compile(
+            r"\b(?:engineer|developer|scientist|architect|analyst|manager|"
+            r"designer|administrator|consultant|specialist|director|officer|"
+            r"lead|head|chief|vp|professor|teacher|instructor|nurse|doctor|"
+            r"lawyer|accountant|technician|programmer|operator|researcher|"
+            r"strategist|planner|coordinator|executive|advisor|counselor|"
+            r"therapist|practitioner|associate|fellow|intern|resident)\s*$",
+            re.IGNORECASE,
+        )
+        for memory in self.memories:
+            if str(memory.get("status", "active")).lower() != "active":
+                continue
+            if memory.get("category") != "learning":
+                continue
+            content_str = str(memory.get("content", "")).lower()
+            # Check if the content ends with a job-title suffix.  A legitimate
+            # learning fact describes a topic (e.g. "machine learning",
+            # "electronics"), not a career role.
+            if _JOB_TITLE_SUFFIXES.search(str(memory.get("value", "")).lower()):
+                memory["status"] = "inactive"
+                memory["embedding"] = None
+                changed = True
+
         # Consolidate only active records that now represent the same current
         # fact.  Older duplicates become inactive history; no user data is
         # deleted and pre-existing inactive records are left unchanged.
@@ -625,14 +772,26 @@ class MemoryStore:
         return changed
 
     def active_memories(self) -> list[dict]:
-        """Return only currently active memories for retrieval/answers."""
+        """Return only currently active, non-expired memories for retrieval/answers."""
+        result = []
+        for memory in self.memories:
+            if not isinstance(memory, dict):
+                continue
+            status = str(memory.get("status", "active")).lower()
+            if status == "active" and not is_expired(memory):
+                result.append(memory)
+        return result
+
+    def all_active_memories(self, include_expired: bool = False) -> list[dict]:
+        """Return active memories, optionally including expired ones for audit."""
         result = []
         for memory in self.memories:
             if not isinstance(memory, dict):
                 continue
             status = str(memory.get("status", "active")).lower()
             if status == "active":
-                result.append(memory)
+                if include_expired or not is_expired(memory):
+                    result.append(memory)
         return result
 
     def _embedding_text_for(self, memory: dict) -> str:
@@ -697,6 +856,9 @@ class MemoryStore:
         status: str = "active",
         source: str = "user_statement",
         confidence: float = 1.0,
+        expires_at: Optional[str] = None,
+        temporal_hint: Optional[str] = None,
+        priority: Optional[str] = None,
     ) -> dict:
         now = utc_now_iso()
         category = category if category in config.VALID_CATEGORIES else "other"
@@ -742,6 +904,10 @@ class MemoryStore:
                 build_embedding_text(category, fact_type, content)
             )
 
+        # Compute expires_at from temporal_hint if not explicitly provided
+        if expires_at is None and temporal_hint:
+            expires_at = compute_expires_at(temporal_hint)
+
         memory = {
             "id": create_memory_id(self.memories),
             "category": category,
@@ -758,6 +924,10 @@ class MemoryStore:
             "source": source,
             "confidence": float(confidence),
         }
+        if expires_at:
+            memory["expires_at"] = expires_at
+        if priority:
+            memory["priority"] = priority
         self.memories.append(memory)
         self.save()
         return memory
@@ -871,5 +1041,32 @@ class MemoryStore:
         memory["status"] = "inactive"
         memory["embedding"] = None
         memory["updated_at"] = utc_now_iso()
+        self.save()
+        return True
+
+    def supersede_memory(self, winner_id: str, loser_id: str) -> bool:
+        """Mark loser as inactive and record supersession by winner.
+
+        Preserves historical memory. Never destructively deletes.
+        Atomic: both IDs must exist; if loser is already inactive or
+        already superseded by winner, this is a no-op returning True.
+        """
+        winner = self.get_by_id(winner_id)
+        loser = self.get_by_id(loser_id)
+        if winner is None or loser is None:
+            return False
+
+        # Already inactive — nothing to do.
+        if loser.get("status") != "active":
+            return True
+
+        # Already superseded by this winner — idempotent.
+        if loser.get("superseded_by") == winner_id:
+            return True
+
+        loser["status"] = "inactive"
+        loser["superseded_by"] = winner_id
+        loser["embedding"] = None
+        loser["updated_at"] = utc_now_iso()
         self.save()
         return True

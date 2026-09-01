@@ -124,6 +124,9 @@ class SafeMemoryManager:
                 "memory": updated,
             }
 
+        if action == "CANCEL":
+            return self._apply_task_cancel(operation, user_message)
+
         return {"status": "skipped", "reason": f"unknown_action:{action}"}
 
     def _apply_upsert_or_add(
@@ -177,7 +180,27 @@ class SafeMemoryManager:
                 user_message=user_message,
             )
 
-        # Goals / projects / others: semantic + exact dedupe; otherwise ADD
+        # Education: same subject may update; else ADD.
+        if category == "education":
+            return self._upsert_by_subject(
+                category=category,
+                content=content,
+                fact_type=fact_type,
+                importance=importance,
+                operation=operation,
+                user_message=user_message,
+            )
+
+        # Priority: always update (only one active priority at a time)
+        if category == "priority":
+            return self._upsert_priority(
+                content=content,
+                fact_type=fact_type,
+                importance=importance,
+                operation=operation,
+            )
+
+        # Goals / ambitions / dreams / projects / others: semantic + exact dedupe; otherwise ADD
         duplicate = self.find_duplicate(
             category=category,
             fact_type=fact_type,
@@ -194,6 +217,14 @@ class SafeMemoryManager:
                     "memory": duplicate,
                 }
 
+        # Cross-category conflict detection: check if adding this memory
+        # would create a semantically contradictory active memory.
+        conflict = self._check_cross_category_conflict(category, operation)
+        if conflict:
+            # Log the conflict but still add the memory — the user can decide.
+            # The conflict info is returned in the result for transparency.
+            pass
+
         memory = self.store.add_memory(
             category=category,
             content=content,
@@ -201,8 +232,131 @@ class SafeMemoryManager:
             importance=importance,
             value=operation.get("value"),
             subject=operation.get("subject") or operation.get("preference_subject"),
+            temporal_hint=operation.get("temporal_hint"),
         )
-        return {"status": "added", "memory_id": memory["id"], "memory": memory}
+        result = {"status": "added", "memory_id": memory["id"], "memory": memory}
+        if conflict:
+            result["cross_category_warning"] = conflict
+        return result
+
+    def _apply_task_cancel(self, operation: dict, user_message: str) -> dict:
+        """Handle CANCEL action: deactivate matching active tasks.
+
+        Finds the active task with the closest matching value (using simple
+        substring and token overlap) and deactivates it via supersede or
+        direct status change.
+        """
+        cancel_value = (operation.get("value") or "").strip().lower()
+        temporal_hint = (operation.get("temporal_hint") or "").strip().lower()
+        if not cancel_value:
+            return {"status": "skipped", "reason": "no_cancel_value"}
+
+        # Normalize temporal typos
+        temporal_hint = temporal_hint.replace("tommorrow", "tomorrow")
+
+        cancel_tokens = set(cancel_value.split())
+        best_match = None
+        best_score = 0
+
+        for memory in self.active_memories:
+            if memory.get("category") != "task":
+                continue
+            mem_value = (memory.get("value") or "").lower()
+            mem_content = (memory.get("content") or "").lower()
+            mem_tokens = set(mem_value.split())
+
+            # Generic task-related cancel words: when the cancel value is
+            # one of these generic terms, give a base score of 2 for any
+            # active task. This ensures "forget my task" matches even when
+            # the specific task value doesn't contain the word "task".
+            _GENERIC_TASK_WORDS = {"task", "exam", "test", "assignment", "quiz", "deadline"}
+            generic_bonus = 2 if cancel_tokens.issubset(_GENERIC_TASK_WORDS) else 0
+
+            # Score: token overlap + substring containment + generic bonus
+            overlap = len(cancel_tokens & mem_tokens)
+            substring = 1 if cancel_value in mem_value or mem_value in cancel_value else 0
+            score = overlap + substring * 2 + generic_bonus
+
+            # Bonus: temporal alignment — check both value and content fields
+            if temporal_hint and (temporal_hint in mem_value or temporal_hint in mem_content):
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_match = memory
+
+        # Require a minimum score to avoid false positives
+        if best_match is None or best_score < 2:
+            return {"status": "skipped", "reason": "no_matching_task"}
+
+        memory_id = best_match["id"]
+        ok = self.store.deactivate_memory(memory_id)
+        return {
+            "status": "cancelled" if ok else "skipped",
+            "memory_id": memory_id,
+            "memory": best_match,
+        }
+
+    def _check_cross_category_conflict(
+        self, new_category: str, operation: dict
+    ) -> Optional[dict]:
+        """Detect semantically contradictory active memories across categories.
+
+        Returns a warning dict if a conflict is found, None otherwise.
+        Does NOT automatically resolve conflicts — just reports them.
+
+        Key conflict pairs:
+        - learning vs goal: "learning machine learning engineer" vs "become machine learning engineer"
+        - learning vs education: "learning diploma second year" vs "studying diploma second year"
+        - goal vs project: rare, but possible duplicate
+        """
+        new_value = (operation.get("value") or "").strip().lower()
+        if not new_value or len(new_value) < 4:
+            return None
+
+        new_tokens = set(new_value.split())
+
+        # Define which categories are potentially conflicting with the new one
+        conflict_map = {
+            "learning": ["goal", "education"],
+            "goal": ["learning"],
+            "education": ["learning"],
+        }
+
+        check_categories = conflict_map.get(new_category, [])
+        if not check_categories:
+            return None
+
+        for memory in self.active_memories:
+            mem_category = memory.get("category", "")
+            if mem_category not in check_categories:
+                continue
+
+            mem_value = (memory.get("value") or memory.get("content") or "").lower()
+            mem_tokens = set(mem_value.split())
+
+            # Require meaningful token overlap (at least 2 tokens in common)
+            overlap = new_tokens & mem_tokens
+            if len(overlap) < 2:
+                continue
+
+            # Calculate overlap ratio to avoid false positives
+            overlap_ratio = len(overlap) / min(len(new_tokens), len(mem_tokens))
+            if overlap_ratio < 0.5:
+                continue
+
+            # High-confidence conflict: both share substantial semantic content
+            # in categories that should be distinct.
+            return {
+                "existing_memory_id": memory["id"],
+                "existing_category": mem_category,
+                "existing_value": memory.get("value"),
+                "new_category": new_category,
+                "new_value": operation.get("value"),
+                "shared_tokens": list(overlap),
+            }
+
+        return None
 
     def _upsert_unique_identity(
         self,
@@ -449,6 +603,46 @@ class SafeMemoryManager:
             importance=importance,
             value=fact_type,
             subject=new_subject,
+        )
+        return {"status": "added", "memory_id": memory["id"], "memory": memory}
+
+    def _upsert_priority(
+        self,
+        *,
+        content: str,
+        fact_type: str,
+        importance: str,
+        operation: dict,
+    ) -> dict:
+        """Handle priority updates. Only one active priority at a time."""
+        # Find existing priority and update it, or create new one
+        for memory in self.active_memories:
+            if memory.get("category") == "priority" and memory.get("fact_type") == "priority":
+                # Update existing priority
+                updated = self.store.update_memory(
+                    memory["id"],
+                    content=content,
+                    fact_type=fact_type,
+                    importance=importance,
+                    value=operation.get("value"),
+                    subject=operation.get("value"),
+                    archive_history=True,
+                )
+                return {
+                    "status": "updated",
+                    "memory_id": memory["id"],
+                    "memory": updated,
+                    "conflict_resolved": True,
+                }
+
+        # No existing priority — create new one
+        memory = self.store.add_memory(
+            category="priority",
+            content=content,
+            fact_type=fact_type,
+            importance=importance,
+            value=operation.get("value"),
+            subject=operation.get("value"),
         )
         return {"status": "added", "memory_id": memory["id"], "memory": memory}
 
@@ -809,7 +1003,7 @@ class SafeMemoryManager:
     ) -> Optional[dict]:
         """Find an existing memory that represents the same logical fact."""
         new_norm = normalized_content(content)
-        new_goal_norm = normalize_goal_text(content) if category == "goal" else ""
+        new_goal_norm = normalize_goal_text(content) if category in {"goal", "ambition", "dream"} else ""
 
         for memory in self.active_memories:
             if memory.get("category") != category:
@@ -840,7 +1034,7 @@ class SafeMemoryManager:
             if normalized_content(old_content) == new_norm:
                 return memory
 
-            if category == "goal":
+            if category in {"goal", "ambition", "dream"}:
                 old_goal_norm = normalize_goal_text(old_content)
                 if new_goal_norm and old_goal_norm == new_goal_norm:
                     return memory
@@ -848,7 +1042,7 @@ class SafeMemoryManager:
             # Semantic similarity as a secondary check; safely handles
             # missing/invalid embeddings (returns False without crashing).
             if self._semantic_same_fact(memory, content):
-                if category == "goal":
+                if category in {"goal", "ambition", "dream"}:
                     old_goal_norm = normalize_goal_text(old_content)
                     if (
                         new_goal_norm
@@ -910,3 +1104,166 @@ class SafeMemoryManager:
         except Exception:
             return False
         return cosine_similarity(query_vec, emb) >= self.duplicate_threshold
+
+    def migrate_corrupted_memories(self) -> dict:
+        """Safe migration: identify and supersede clearly corrupted active memories.
+
+        This function:
+        1. Identifies malformed records (typos like "bulid", "noting")
+        2. Identifies cross-category misclassifications
+        3. Supersedes corrupted records with correct ones when equivalence is clear
+        4. Deactivates invalid records that have no correct replacement
+        5. Never destructively deletes anything
+
+        Returns a summary of actions taken.
+        """
+        actions = {
+            "superseded": [],
+            "deactivated": [],
+            "skipped": [],
+        }
+
+        # Build index of active memories by category and value
+        active_by_id = {m["id"]: m for m in self.active_memories}
+        active_by_category = {}
+        for m in self.active_memories:
+            cat = m.get("category", "")
+            if cat not in active_by_category:
+                active_by_category[cat] = []
+            active_by_category[cat].append(m)
+
+        # Normalization map for ordinal/number tokens in migration comparisons
+        _NUM_NORMALIZE = {
+            "1st": "first", "2nd": "second", "3rd": "third", "4th": "fourth",
+            "5th": "fifth", "6th": "sixth", "7th": "seventh", "8th": "eighth",
+            "9th": "ninth", "10th": "tenth",
+        }
+
+        def _norm_tokens(value: str) -> set:
+            tokens = set(value.lower().split())
+            return {_NUM_NORMALIZE.get(t, t) for t in tokens}
+
+        # Rule 1: Deactivate invalid goals ("noting" typo)
+        for memory in list(self.active_memories):
+            if memory.get("category") != "goal":
+                continue
+            value = (memory.get("value") or "").lower().strip()
+            # Normalize common typos
+            normalized = value.replace("noting", "nothing")
+            if normalized in {"nothing", "something", "anything", "everything"}:
+                self.store.deactivate_memory(memory["id"])
+                actions["deactivated"].append({
+                    "id": memory["id"],
+                    "value": memory.get("value"),
+                    "reason": "invalid_goal_value",
+                })
+
+        # Rule 2: Supersede malformed goals with typos ("bulid" → "build")
+        # when a correct project exists with the same semantic content
+        typo_fixes = {
+            "bulid": "build",
+            "develope": "develop",
+            "creaet": "create",
+        }
+
+        for memory in list(self.active_memories):
+            if memory.get("category") != "goal":
+                continue
+            value = (memory.get("value") or "").lower()
+            # Check if value contains a typo
+            fixed_value = value
+            has_typo = False
+            for typo, fix in typo_fixes.items():
+                if typo in fixed_value:
+                    fixed_value = fixed_value.replace(typo, fix)
+                    has_typo = True
+
+            if not has_typo:
+                continue
+
+            # Look for a correct project with similar content
+            for project in active_by_category.get("project", []):
+                proj_value = (project.get("value") or "").lower()
+                proj_content = (project.get("content") or "").lower()
+                # Check if the fixed goal value matches the project
+                if (fixed_value in proj_value or fixed_value in proj_content or
+                        proj_value in fixed_value or proj_content in fixed_value):
+                    self.store.supersede_memory(project["id"], memory["id"])
+                    actions["superseded"].append({
+                        "loser_id": memory["id"],
+                        "loser_value": memory.get("value"),
+                        "winner_id": project["id"],
+                        "winner_value": project.get("value"),
+                        "reason": "typo_in_goal_superseded_by_correct_project",
+                    })
+                    break
+            else:
+                # No matching project found — just note it
+                actions["skipped"].append({
+                    "id": memory["id"],
+                    "value": memory.get("value"),
+                    "reason": "typo_goal_no_matching_project",
+                })
+
+        # Rule 3: Supersede misclassified learning memories
+        # when a semantically equivalent education or goal exists
+        for memory in list(self.active_memories):
+            if memory.get("category") != "learning":
+                continue
+            value = (memory.get("value") or "").lower()
+            content = (memory.get("content") or "").lower()
+            tokens = _norm_tokens(value)
+
+            # Check against education memories: all learning tokens must be
+            # present in education tokens (with number normalization)
+            for edu in active_by_category.get("education", []):
+                edu_value = (edu.get("value") or "").lower()
+                edu_tokens = _norm_tokens(edu_value)
+                # All learning tokens must be present in education tokens
+                if tokens and tokens.issubset(edu_tokens):
+                    self.store.supersede_memory(edu["id"], memory["id"])
+                    actions["superseded"].append({
+                        "loser_id": memory["id"],
+                        "loser_value": memory.get("value"),
+                        "winner_id": edu["id"],
+                        "winner_value": edu.get("value"),
+                        "reason": "misclassified_learning_superseded_by_education",
+                    })
+                    break
+
+            # Check against goal memories (for career-role learning like
+            # "learning machine learning engineer"). Only supersede when the
+            # learning value CONTAINS the full goal value (superset), NOT
+            # when the learning value is a subset of the goal.
+            # e.g., "machine learning" should NOT supersede goal "machine learning engineer"
+            # but "learning machine learning engineer" SHOULD supersede goal "machine learning engineer"
+            for goal in active_by_category.get("goal", []):
+                goal_value = (goal.get("value") or "").lower()
+                goal_tokens = _norm_tokens(goal_value)
+                # All goal tokens must be present in learning tokens
+                if goal_tokens and goal_tokens.issubset(tokens):
+                    self.store.supersede_memory(goal["id"], memory["id"])
+                    actions["superseded"].append({
+                        "loser_id": memory["id"],
+                        "loser_value": memory.get("value"),
+                        "winner_id": goal["id"],
+                        "winner_value": goal.get("value"),
+                        "reason": "misclassified_learning_superseded_by_goal",
+                    })
+                    break
+
+        # Reload active memories after migration
+        self._reload_active_memories()
+
+        return actions
+
+    def _reload_active_memories(self) -> None:
+        """Reload active memories from the store.
+
+        Since active_memories is a read-only property backed by the store,
+        this method simply triggers the store to refresh its internal state
+        by re-scanning its memories list.
+        """
+        # Force the store to re-evaluate its active memories cache
+        # by accessing the property (which always reads from store.memories).
+        _ = self.active_memories

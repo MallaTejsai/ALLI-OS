@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from . import config
@@ -183,6 +184,7 @@ class MemoryRetriever:
         allowed_fact_types = self._allowed_fact_types(intent)
         filters = intent.filters or {}
         allowed_categories = filters.get("categories")
+
         exclude_fact_types = set(filters.get("exclude_fact_types") or [])
         strict = bool(filters.get("strict", False))
 
@@ -281,6 +283,40 @@ class MemoryRetriever:
                 "category_match": category_match,
                 "final_score": final_score,
             })
+
+        # Fallback: if no results for a strict category, search a related
+        # category without merging stored categories.  The primary category
+        # stays pure — we only broaden at retrieval time.
+        # NOTE: learning→education fallback is intentionally omitted.
+        # Education and learning must remain semantically separate per spec.
+        if not results and strict and allowed_categories:
+            fallback_map = {
+                "education": "learning",
+                "ambition": "goal",
+            }
+            for primary_cat in allowed_categories:
+                fallback_cat = fallback_map.get(primary_cat)
+                if fallback_cat and fallback_cat not in allowed_categories:
+                    fallback_results = []
+                    for memory in active:
+                        embedding = memory.get("embedding")
+                        if not isinstance(embedding, list) or not embedding:
+                            continue
+                        category = str(memory.get("category", "")).lower()
+                        if category != fallback_cat:
+                            continue
+                        similarity = cosine_similarity(question_vec, embedding)
+                        # Use 0.0 threshold for fallback — category filter
+                        # already constrains the results.
+                        fallback_results.append({
+                            "memory": memory,
+                            "similarity": similarity,
+                            "category_match": True,
+                            "final_score": similarity * config.SEMANTIC_WEIGHT + config.CATEGORY_WEIGHT,
+                        })
+                    if fallback_results:
+                        results = fallback_results
+                        break
 
         results.sort(
             key=lambda item: (item["final_score"], item["similarity"]),

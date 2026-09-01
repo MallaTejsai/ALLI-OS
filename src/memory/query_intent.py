@@ -22,11 +22,45 @@ def normalize_memory_query(query: str) -> str:
     Collapses equivalent nickname spellings so semantic matching is stable.
     """
     text = (query or "").strip().lower()
-    text = text.replace("’", "'")
+    text = text.replace("\u2019", "'")
     # nick-name / nick name → nickname (generic, not a one-off answer rule)
     text = re.sub(r"\bnick[\s\-]+name\b", "nickname", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+# Normalization map for common typos that change semantic meaning.
+# Used to normalize vague/invalid goal checks so typos like "noting"
+# are treated identically to "nothing".
+_CANONICAL_WORDS = {
+    "nothing": {"noting", "nothign", "noting"},
+    "something": {"somthing", "smething"},
+    "anything": {"anythign", "anyting"},
+    "everything": {"everythign", "evrything"},
+}
+
+
+def _normalize_goal_word(word: str) -> str:
+    """Normalize a single word, correcting obvious typos."""
+    # Strip trailing punctuation before checking
+    stripped = word.strip(".,!?;:'\"")
+    lower = stripped.lower()
+    for canonical, typos in _CANONICAL_WORDS.items():
+        if lower in typos or lower == canonical:
+            return canonical
+    return word  # Return original with punctuation intact
+
+
+def _normalize_vague_goals(text: str) -> str:
+    """Replace common typos of vague goal words with canonical forms.
+
+    This ensures that "noting" is treated the same as "nothing" in
+    vague/incomplete statement detection.
+    """
+    lower = text.lower()
+    words = lower.split()
+    normalized = [_normalize_goal_word(w) for w in words]
+    return " ".join(normalized)
 
 
 # Prototype phrases describe the *meaning* of each memory concept.
@@ -44,10 +78,22 @@ CONCEPT_PROTOTYPES: dict[str, list[str]] = {
         "What do people call the user for short?",
     ],
     "goal": [
-        "What are the user's life goals dreams ambitions and aims?",
+        "What are the user's life goals and aims?",
         "What does the user want to become in the future?",
         "What is the user trying to achieve long term?",
-        "What career or life outcomes is the user aiming for?",
+        "What career outcomes is the user aiming for?",
+    ],
+    "ambition": [
+        "What are the user's professional ambitions?",
+        "What career drive and aspiration does the user have?",
+        "What does the user aim to achieve professionally?",
+        "What is the user's ambition in life?",
+    ],
+    "dream": [
+        "What are the user's dreams and aspirations?",
+        "What does the user dream of becoming?",
+        "What is the user's lifelong vision?",
+        "What does the user dream of achieving?",
     ],
     "skill": [
         "What skills abilities and competencies does the user already have?",
@@ -62,6 +108,7 @@ CONCEPT_PROTOTYPES: dict[str, list[str]] = {
         "What topics is the user currently learning?",
         "What learning goals does the user have?",
         "What am I learning?",
+        "What topics is the user currently studying?",
     ],
     "preference": [
         "What does the user like or dislike?",
@@ -73,6 +120,13 @@ CONCEPT_PROTOTYPES: dict[str, list[str]] = {
         "What are the user's interests and hobbies?",
         "What topics is the user interested in?",
     ],
+    "education": [
+        "What is the user's education background?",
+        "What is the user studying formally?",
+        "Where does the user study or what degree are they pursuing?",
+        "What course or diploma is the user enrolled in?",
+        "What am I studying in school or college?",
+    ],
     "project": [
         "What projects is the user building or working on?",
         "What is the user creating or developing?",
@@ -81,9 +135,14 @@ CONCEPT_PROTOTYPES: dict[str, list[str]] = {
         "What habits or daily routines does the user have?",
         "What does the user usually do regularly?",
     ],
-    "background": [
-        "What is the user's education college course or background?",
-        "Where does the user study or what did they study?",
+    "task": [
+        "What temporary tasks does the user have?",
+        "What does the user need to do soon?",
+    ],
+    "priority": [
+        "What is the user's current main priority?",
+        "What is the user focusing on right now?",
+        "What is the user's top priority?",
     ],
     "personal_overview": [
         "What do you remember about the user overall?",
@@ -106,12 +165,11 @@ CATEGORY_QUERY_CUES: dict[str, tuple[str, ...]] = {
     "nickname": (r"\bnickname\b", r"\bnick[\s\-]+name\b", r"\bcall me\b"),
     "goal": (
         r"\bgoals?\b",
-        r"\bdreams?\b",
-        r"\bambitions?\b",
-        r"\baims?\b",
         r"\b(?:my\s+)?goals?\b",
         r"\bwant to become\b",
     ),
+    "ambition": (r"\bambitions?\b",),
+    "dream": (r"\bdreams?\b",),
     "skill": (r"\bskills?\b",),
     "learning": (r"\blearning\b", r"\bam i learning\b", r"\bwhat i(?:'m| am) learning\b", r"\bwant to learn\b"),
     "preference": (
@@ -121,9 +179,11 @@ CATEGORY_QUERY_CUES: dict[str, tuple[str, ...]] = {
     r"\bwhich\b.*\b(?:i\s+)?(?:like|dislike|enjoy|hate)\b",
 ),
     "interest": (r"\binterests?\b", r"\bhobb(?:y|ies)\b"),
-    "project": (r"\bprojects?\b",),
+    "education": (r"\bstud(?:ying|ing)\b", r"\bstud(?:y|ies)\b", r"\beducation\b", r"\bcollege\b", r"\bbackground\b", r"\bcourse\b", r"\bdiploma\b"),
+    "project": (r"\bprojects?\b", r"\bbuild(?:ing)?\b", r"\bcreating\b", r"\bdevelop(?:ing)?\b"),
     "habit": (r"\bhabits?\b", r"\broutines?\b"),
-    "background": (r"\beducation\b", r"\bcollege\b", r"\bbackground\b"),
+    "task": (r"\btasks?\b", r"\bto[\s-]dos?\b", r"\bneed to do\b", r"\bhave\b.*?\b(?:tomorrow|tommorrow|today|tonight)\b"),
+    "priority": (r"\bpriority\b", r"\bpriorities\b", r"\bmain focus\b", r"\btop focus\b"),
 }
 
 
@@ -142,6 +202,16 @@ INTENT_FILTERS: dict[str, dict] = {
         "categories": {"goal"},
         "fact_types": None,
         "exclude_fact_types": {"learning_goal"},
+        "strict": True,
+    },
+    "ambition": {
+        "categories": {"ambition"},
+        "fact_types": None,
+        "strict": True,
+    },
+    "dream": {
+        "categories": {"dream"},
+        "fact_types": None,
         "strict": True,
     },
     "skill": {
@@ -164,6 +234,11 @@ INTENT_FILTERS: dict[str, dict] = {
         "fact_types": None,
         "strict": True,
     },
+    "education": {
+        "categories": {"education"},
+        "fact_types": None,
+        "strict": True,
+    },
     "project": {
         "categories": {"project"},
         "fact_types": None,
@@ -174,9 +249,14 @@ INTENT_FILTERS: dict[str, dict] = {
         "fact_types": None,
         "strict": True,
     },
-    "background": {
-        "categories": {"education"},
+    "task": {
+        "categories": {"task"},
         "fact_types": None,
+        "strict": True,
+    },
+    "priority": {
+        "categories": {"priority"},
+        "fact_types": {"priority"},
         "strict": True,
     },
     "personal_overview": {
@@ -192,9 +272,12 @@ MEMORY_READ_INTENTS = frozenset(INTENT_FILTERS.keys())
 CONFUSABLE_INTENTS = {
     "skill": frozenset({"learning"}),
     "learning": frozenset({"skill"}),
-    "goal": frozenset({"learning"}),
+    "goal": frozenset({"learning", "ambition", "dream"}),
+    "ambition": frozenset({"goal", "dream"}),
+    "dream": frozenset({"goal", "ambition"}),
     "name": frozenset({"nickname"}),
     "nickname": frozenset({"name"}),
+    "education": frozenset({"learning"}),
 }
 
 
@@ -211,6 +294,8 @@ class QueryIntent:
     filters: dict = field(default_factory=dict)
     requested: list[str] = field(default_factory=list)
     normalized_query: str = ""
+    needs_clarification: bool = False
+    clarification_message: str = ""
 
     @property
     def label(self) -> str:
@@ -282,9 +367,33 @@ class QueryIntentDetector:
         # memory supplied as optional context, but must not retrieve a category
         # merely because it is semantically adjacent.
         if self._is_advice_or_ambiguous_memory_query(normalized):
+            # Vague preferences and incomplete statements need clarification,
+            # not an LLM response.
+            clarification = self._get_clarification_message(normalized)
+            if clarification:
+                return QueryIntent(
+                    primary="unknown",
+                    score=0.0,
+                    is_memory_read=False,
+                    is_general_knowledge=False,
+                    normalized_query=normalized,
+                    needs_clarification=True,
+                    clarification_message=clarification,
+                )
             return QueryIntent(
                 primary="unknown",
                 score=0.0,
+                is_memory_read=False,
+                is_general_knowledge=True,
+                normalized_query=normalized,
+            )
+
+        # Clearly general-knowledge questions (math, definitions, facts)
+        # must never enter the memory-read pipeline.
+        if self._is_clearly_general_knowledge(normalized):
+            return QueryIntent(
+                primary="general_knowledge",
+                score=1.0,
                 is_memory_read=False,
                 is_general_knowledge=True,
                 normalized_query=normalized,
@@ -294,13 +403,7 @@ class QueryIntentDetector:
             self._ensure_prototypes()
             query_vec = self.embedding_store.generate_embedding(normalized)
         except EmbeddingError:
-            return QueryIntent(
-                primary="unknown",
-                score=0.0,
-                is_memory_read=False,
-                is_general_knowledge=True,
-                normalized_query=normalized,
-            )
+            return self._cue_only_fallback(normalized)
 
         scores: dict[str, float] = {}
         for concept, vectors in self._prototype_vectors.items():
@@ -350,6 +453,16 @@ class QueryIntentDetector:
             and best_score >= memory_floor
             and not is_general
         )
+
+        # Strong temporal cue: "have X tomorrow/today" → always task.
+        # The semantic similarity for terse temporal phrases can fall below
+        # the intent threshold, but the pattern itself is unambiguous.
+        if "task" in cued and re.search(
+            r"\bhave\b.*?\b(?:tomorrow|tommorrow|today|tonight)\b", normalized
+        ):
+            primary = "task"
+            best_score = max(scores.get("task", 0.0), 0.5)
+            is_memory = True
 
         if is_general:
             for concept, score in ranked[1:]:
@@ -432,6 +545,56 @@ class QueryIntentDetector:
 
         return None
 
+    def _cue_only_fallback(self, normalized: str) -> QueryIntent:
+        """Deterministic fallback when embeddings are unavailable.
+
+        Uses lexical cues to route queries to the correct memory category
+        without requiring Ollama. Returns 'unknown' only when no cues match.
+        """
+        cued = self._cued_intents(normalized)
+        if not cued:
+            return QueryIntent(
+                primary="unknown",
+                score=0.0,
+                is_memory_read=False,
+                is_general_knowledge=True,
+                normalized_query=normalized,
+            )
+
+        # Prefer the first cued intent (order in CATEGORY_QUERY_CUES
+        # reflects priority for overlapping matches).
+        primary = cued[0]
+        filters = dict(INTENT_FILTERS.get(primary, {}))
+        requested = list(dict.fromkeys(cued))
+
+        return QueryIntent(
+            primary=primary,
+            score=0.8,
+            scores={concept: 0.8 for concept in cued},
+            is_memory_read=primary in MEMORY_READ_INTENTS,
+            is_general_knowledge=False,
+            filters=filters,
+            requested=requested,
+            normalized_query=normalized,
+        )
+
+    @staticmethod
+    def _is_clearly_general_knowledge(normalized_query: str) -> bool:
+        """Identify questions that are clearly about general knowledge, not personal memory."""
+        return bool(
+            re.search(
+                r"\bwhat\s+is\s+\d+\s*[+\-*/]\s*\d+\b|"
+                r"\bwhat\s+is\s+the\s+(?:capital|population|currency|president|"
+                r"founder|ceo|meaning|definition|formula|speed)\b|"
+                r"\bwho\s+(?:invented|discovered|created|wrote|composed)\b|"
+                r"\bhow\s+(?:do|does|did|can|could|would|should)\s+"
+                r"(?:you|we|one|i|people|humans|computers|animals)\b|"
+                r"\bwhen\s+(?:was|did|were|is)\s+(?:the|a|an)\b|"
+                r"\bwhere\s+(?:is|are|was|were)\s+(?:the|a|an)\b",
+                normalized_query,
+            )
+        )
+
     @staticmethod
     def _is_future_forecast(normalized_query: str) -> bool:
         """Identify speculative future questions rather than memory reads."""
@@ -445,16 +608,82 @@ class QueryIntentDetector:
 
     @staticmethod
     def _is_advice_or_ambiguous_memory_query(normalized_query: str) -> bool:
-        """Keep recommendations and unnamed-object questions out of memory reads."""
+        """Keep recommendations, vague statements, and unnamed-object questions
+        out of memory reads."""
+        # Normalize typos (e.g., "noting" → "nothing") so vague/invalid
+        # goal statements are caught regardless of spelling.
+        query = _normalize_vague_goals(normalized_query)
         return bool(
             re.search(
                 r"\bwhat\s+should\s+i\s+learn\b|"
                 r"\bwhich\s+technology\s+is\s+best\s+for\s+me\b|"
                 r"\bwhat\s+do\s+i\s+like\s+about\s+"
-                r"(?:something|it|that|this)\b",
-                normalized_query,
+                r"(?:something|it|that|this)\b|"
+                r"\bwhat\s+should\s+i\s+study\b|"
+                # Vague preference statements — not specific enough to store.
+                r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+"
+                r"(?:anything|everything|something|nothing)\b|"
+                r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+all\b|"
+                r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+both\b|"
+                r"\bi\s+don'?t\s+(?:like|love|enjoy|hate|dislike)\s+"
+                r"(?:anything|everything|something|nothing)\b|"
+                r"\bi\s+do\s+not\s+(?:like|love|enjoy|hate|dislike)\s+"
+                r"(?:anything|everything|something|nothing)\b|"
+                # Incomplete statements — no object, cannot be a memory query.
+                r"\bi\s+(?:want\s+to|wanna|aim\s+to|plan\s+to)\s*$|"
+                r"\bi\s+(?:want\s+to|wanna)\s+(?:become|be)\s*$|"
+                # Vague/invalid goal statements — pronoun objects are meaningless.
+                r"\bi\s+(?:want\s+to|wanna)\s+(?:become|be)\s+"
+                r"(?:nothing|something|anything|everything)\b",
+                query,
             )
         )
+
+    @staticmethod
+    def _get_clarification_message(normalized_query: str) -> str:
+        """Return a clarification message for vague/incomplete statements,
+        or empty string if the query should be routed to the LLM instead."""
+        # Normalize typos (e.g., "noting" → "nothing") so vague/invalid
+        # goal statements are caught regardless of spelling.
+        query = _normalize_vague_goals(normalized_query)
+        # Vague preference statements
+        if re.search(
+            r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+"
+            r"(?:anything|everything|something|nothing)\b|"
+            r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+all\b|"
+            r"\bi\s+(?:'m\s+)?(?:like|love|enjoy|hate|dislike)s?\s+both\b|"
+            r"\bi\s+don'?t\s+(?:like|love|enjoy|hate|dislike)\s+"
+            r"(?:anything|everything|something|nothing)\b|"
+            r"\bi\s+do\s+not\s+(?:like|love|enjoy|hate|dislike)\s+"
+            r"(?:anything|everything|something|nothing)\b",
+            query,
+        ):
+            return (
+                "Could you tell me something specific you like or dislike? "
+                "For example, 'I like Python' or 'I dislike cold weather'."
+            )
+        # Incomplete statements
+        if re.search(
+            r"\bi\s+(?:want\s+to|wanna|aim\s+to|plan\s+to)\s*$|"
+            r"\bi\s+(?:want\s+to|wanna)\s+(?:become|be)\s*$",
+            query,
+        ):
+            return (
+                "What would you like to do or become? "
+                "Please complete your thought so I can remember it."
+            )
+        # Vague/invalid goal statements
+        if re.search(
+            r"\bi\s+(?:want\s+to|wanna)\s+(?:become|be)\s+"
+            r"(?:nothing|something|anything|everything)\b",
+            query,
+        ):
+            return (
+                "That's too vague for me to remember. "
+                "Could you tell me a specific goal, like "
+                "'I want to become a software engineer'?"
+            )
+        return ""
 
     def _cued_intents(self, normalized_query: str) -> list[str]:
         found = []
@@ -478,8 +707,10 @@ class QueryIntentDetector:
             re.search(r"\band\b|,|/|\bas well as\b", normalized_query)
         )
         order = [
-            "name", "nickname", "skill", "goal", "learning", "preference",
-            "interest", "project", "habit", "background", "personal_overview",
+            "name", "nickname", "skill", "goal", "ambition", "dream",
+            "learning", "education", "preference",
+            "interest", "project", "habit", "task", "priority",
+            "personal_overview",
         ]
 
         # Compound questions with multiple explicit cues: preserve question order.

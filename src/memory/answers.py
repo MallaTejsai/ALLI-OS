@@ -7,6 +7,7 @@ Does not map question strings to hard-coded replies.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from .query_intent import QueryIntent
@@ -16,21 +17,23 @@ MISSING_TEMPLATES = {
     "name": "I don't currently have any stored information about your name.",
     "nickname": "I don't currently have any stored information about your nickname.",
     "goal": "I don't currently have any stored information about your goals.",
+    "ambition": "I don't currently have any stored information about your ambitions.",
+    "dream": "I don't currently have any stored information about your dreams.",
     "skill": "I don't currently have any stored information about your skills.",
     "learning": "I don't currently have any stored information about your learning goals.",
+    "education": "I don't currently have any stored information about your education.",
     "preference": "I don't currently have any stored information about your preferences.",
     "interest": "I don't currently have any stored information about your interests.",
     "project": "I don't currently have any stored information about your projects.",
     "habit": "I don't currently have any stored information about your habits.",
-    "background": "I don't currently have any stored information about your background.",
+    "task": "I don't currently have any stored information about your tasks.",
+    "priority": "I don't currently have any stored information about your priorities.",
     "personal_overview": "I don't currently have any long-term information stored about you.",
 }
 
 
 def missing_answer(intent: QueryIntent, question: str = "") -> str:
     """Build a clear missing-info response without guessing."""
-    import re
-
     text = (question or "").strip().lower()
     noun = re.search(r"\bfavou?rite\s+([a-z0-9]+)", text)
     if noun:
@@ -47,12 +50,16 @@ SECTION_TITLES = {
     "nickname": "Nickname",
     "skill": "Skills",
     "goal": "Goals",
+    "ambition": "Ambitions",
+    "dream": "Dreams",
     "learning": "Learning",
+    "education": "Education",
     "preference": "Preferences",
     "interest": "Interests",
     "project": "Projects",
     "habit": "Habits",
-    "background": "Education",
+    "task": "Tasks",
+    "priority": "Priority",
 }
 
 
@@ -97,7 +104,7 @@ def _multi_category_answer(
             )
             continue
 
-        if label in {"skill", "goal", "interest", "learning", "project", "habit", "background"}:
+        if label in {"skill", "goal", "ambition", "dream", "interest", "learning", "project", "habit", "education", "task"}:
             bullets = []
             for memory in memories:
                 value = _display_value(memory)
@@ -138,6 +145,12 @@ def _single_intent_answer(
     if primary == "goal":
         return _goal_answer(memories)
 
+    if primary == "ambition":
+        return _ambition_dream_answer(memories, "ambition")
+
+    if primary == "dream":
+        return _ambition_dream_answer(memories, "dream")
+
     if primary == "skill":
         return _list_answer(
             memories,
@@ -148,6 +161,15 @@ def _single_intent_answer(
         )
 
     if primary == "learning":
+        q = (question or "").lower()
+        if re.search(r"\bstudying\b|\bstud(?:y|ies)\b", q):
+            return _list_answer(
+                memories,
+                singular="You are studying",
+                plural="You are studying",
+                use_values=True,
+                fallback_prefix="Your studies:",
+            )
         return _list_answer(
             memories,
             singular="You are learning",
@@ -155,6 +177,9 @@ def _single_intent_answer(
             use_values=True,
             fallback_prefix="Your learning:",
         )
+
+    if primary == "education":
+        return _education_answer(memories, question=question)
 
     if primary == "preference":
         return _preference_answer(memories)
@@ -186,14 +211,17 @@ def _single_intent_answer(
             fallback_prefix="Your habits:",
         )
 
-    if primary == "background":
+    if primary == "task":
         return _list_answer(
             memories,
-            singular="About your background:",
-            plural="About your background:",
-            use_values=False,
-            fallback_prefix="About your background:",
+            singular="Your task is",
+            plural="Your tasks are",
+            use_values=True,
+            fallback_prefix="Your tasks:",
         )
+
+    if primary == "priority":
+        return _priority_answer(memories)
 
     if primary == "personal_overview":
         return _personal_overview_answer(memories)
@@ -241,12 +269,21 @@ def _identity_answer(
 
 
 def _goal_answer(memories: list[dict]) -> str:
-    import re
-
     parts = []
     for memory in memories:
         value = _display_value(memory)
-        if not re.match(r"^(become|be)\b", value, flags=re.IGNORECASE):
+        # Clean up malformed values like "become build X" → "build X"
+        value = re.sub(
+            r"^become\s+(?:build|create|develop|make|design|write|code)\b",
+            lambda m: m.group(0).split(" ", 1)[1],
+            value,
+            flags=re.IGNORECASE,
+        )
+        if not re.match(
+            r"^(?:become|be|build|create|develop|make|design|write|code)\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
             if memory.get("fact_type") == "learning_goal":
                 if not value.lower().startswith("learn"):
                     value = f"learn {value}"
@@ -259,6 +296,59 @@ def _goal_answer(memories: list[dict]) -> str:
     if len(parts) == 1:
         return f"Your goal is to {parts[0]}."
     return f"Your goals are to {_join_natural(parts)}."
+
+
+def _ambition_dream_answer(memories: list[dict], category: str) -> str:
+    """Generate a natural answer for ambition or dream memories."""
+    parts = []
+    for memory in memories:
+        value = _display_value(memory)
+        # Clean up malformed values like "become build X" → "build X"
+        value = re.sub(
+            r"^become\s+(?:build|create|develop|make|design|write|code)\b",
+            lambda m: m.group(0).split(" ", 1)[1],
+            value,
+            flags=re.IGNORECASE,
+        )
+        # Do not prepend "become" when the value already starts with a verb
+        # that expresses an action (build, create, develop, etc.) or a state
+        # (become, be, achieve).  Prepending "become" to "build" produces the
+        # ungrammatical "become build".
+        if not re.match(
+            r"^(?:become|be|achieve|build|create|develop|make|design|write|code)\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            value = f"become {value}"
+        parts.append(value)
+
+    if not parts:
+        return MISSING_TEMPLATES.get(category, MISSING_TEMPLATES["goal"])
+
+    label = "ambition" if category == "ambition" else "dream"
+    if len(parts) == 1:
+        return f"Your {label} is to {parts[0]}."
+    return f"Your {label}s are to {_join_natural(parts)}."
+
+
+def _education_answer(memories: list[dict], question: str = "") -> str:
+    """Generate an answer for education memories."""
+    q = (question or "").lower()
+    if re.search(r"\bstudying\b|\bstud(?:y|ies)\b", q):
+        return _list_answer(
+            memories,
+            singular="You are studying",
+            plural="You are studying",
+            use_values=True,
+            fallback_prefix="Your studies:",
+        )
+    return _list_answer(
+        memories,
+        singular="About your education:",
+        plural="About your education:",
+        use_values=False,
+        fallback_prefix="About your education:",
+    )
 
 
 def _display_value(memory: dict) -> str:
@@ -343,6 +433,21 @@ def _join_natural(parts: list[str]) -> str:
     return ", ".join(parts[:-1]) + f", and {parts[-1]}"
 
 
+def _priority_answer(memories: list[dict]) -> str:
+    """Generate a natural answer for priority memories."""
+    if not memories:
+        return MISSING_TEMPLATES["priority"]
+    
+    # Get the most recent priority (should be only one active)
+    memory = memories[0]
+    value = _display_value(memory)
+    
+    if not value:
+        return MISSING_TEMPLATES["priority"]
+    
+    return f"Your current main priority is {value}."
+
+
 def _preference_answer(memories: list[dict]) -> str:
     likes = []
     dislikes = []
@@ -377,12 +482,16 @@ def _personal_overview_answer(memories: list[dict]) -> str:
         "identity": "Identity",
         "education": "Education",
         "goal": "Goals",
+        "ambition": "Ambitions",
+        "dream": "Dreams",
         "skill": "Skills",
         "learning": "Learning",
         "interest": "Interests",
         "preference": "Preferences",
         "project": "Projects",
         "routine": "Habits",
+        "task": "Tasks",
+        "priority": "Priority",
     }
 
     for category, label in labels.items():

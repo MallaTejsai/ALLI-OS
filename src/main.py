@@ -34,7 +34,7 @@ from memory import (
     save_json,
 )
 from memory import config
-from memory.answers import grounded_answer, llm_memory_system_prompt
+from memory.answers import grounded_answer
 from memory.extractor import looks_like_question
 from memory.query_intent import QueryIntentDetector
 
@@ -122,40 +122,6 @@ def build_general_chat_messages(conversation: list, question: str) -> list:
         messages.extend(recent_messages)
     else:
         messages.append({"role": "user", "content": question})
-    return messages
-
-
-def build_memory_llm_messages(
-    question: str,
-    relevant_memories: list,
-) -> list:
-    messages = [{"role": "system", "content": llm_memory_system_prompt()}]
-    if relevant_memories:
-        memory_lines = [
-            (
-                f"- category={memory.get('category')}, "
-                f"fact_type={memory.get('fact_type')}, "
-                f"value={memory.get('value')}, "
-                f"content={memory.get('content')}"
-            )
-            for memory in relevant_memories
-        ]
-        messages.append({
-            "role": "system",
-            "content": (
-                "Answer only from these supplied memories:\n"
-                + "\n".join(memory_lines)
-            ),
-        })
-    else:
-        messages.append({
-            "role": "system",
-            "content": (
-                "No relevant memories were supplied. "
-                "Say that the requested personal information is not stored."
-            ),
-        })
-    messages.append({"role": "user", "content": question})
     return messages
 
 
@@ -306,7 +272,23 @@ def main() -> None:
         # ==========================================
         intent = retriever.detect_intent(question)
 
-        if intent.is_memory_read:
+        # Vague/incomplete statements need clarification, not an LLM response.
+        if intent.needs_clarification:
+            answer = intent.clarification_message
+            answer_source = "clarification"
+        # General knowledge / advice / vague statements never touch memory.
+        elif intent.is_general_knowledge or not intent.is_memory_read:
+            messages = build_general_chat_messages(conversation, question)
+            print("\nALLI: Thinking...")
+            try:
+                response = chat(model=CHAT_MODEL, messages=messages)
+                answer = response["message"]["content"]
+                answer_source = "ollama_general"
+            except Exception as error:
+                print(f"\nALLI: I could not contact Ollama. {error}")
+                save_json(config.CONVERSATION_FILE, conversation)
+                continue
+        elif intent.is_memory_read:
             if intent.is_multi:
                 grouped = retriever.retrieve_by_requested_intents(
                     question,
