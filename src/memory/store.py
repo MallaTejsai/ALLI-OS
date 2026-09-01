@@ -561,6 +561,22 @@ class MemoryStore:
                 memory["updated_at"] = memory.get("created_at", now)
                 changed = True
 
+            # v0.6 provenance: legacy records are preserved and receive the
+            # same defaults used for explicit user statements going forward.
+            source = memory.get("source")
+            if not isinstance(source, str) or not source.strip():
+                memory["source"] = "user_statement"
+                changed = True
+
+            confidence = memory.get("confidence")
+            if (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, (int, float))
+                or not 0.0 <= float(confidence) <= 1.0
+            ):
+                memory["confidence"] = 1.0
+                changed = True
+
             embedding = memory.get("embedding")
             if embedding is not None and not isinstance(embedding, list):
                 memory["embedding"] = None
@@ -679,6 +695,8 @@ class MemoryStore:
         subject: Optional[str] = None,
         embedding: Optional[list[float]] = None,
         status: str = "active",
+        source: str = "user_statement",
+        confidence: float = 1.0,
     ) -> dict:
         now = utc_now_iso()
         category = category if category in config.VALID_CATEGORIES else "other"
@@ -687,6 +705,17 @@ class MemoryStore:
         importance = normalize_importance(
             importance or default_importance_for(category, fact_type)
         )
+        source = (
+            source.strip()
+            if isinstance(source, str) and source.strip()
+            else "user_statement"
+        )
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0.0 <= float(confidence) <= 1.0
+        ):
+            confidence = 1.0
 
         if category == "preference" and fact_type in {"like", "dislike"}:
             resolved_value = fact_type
@@ -726,6 +755,8 @@ class MemoryStore:
             "embedding_version": config.EMBEDDING_TEXT_VERSION,
             "created_at": now,
             "updated_at": now,
+            "source": source,
+            "confidence": float(confidence),
         }
         self.memories.append(memory)
         self.save()

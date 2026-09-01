@@ -85,7 +85,34 @@ def has_explicit_change_signal(message: str) -> bool:
 
 def is_temporary_message(message: str) -> bool:
     lower = message.lower()
-    return any(phrase in lower for phrase in TEMPORARY_PHRASES)
+    if any(phrase in lower for phrase in TEMPORARY_PHRASES):
+        return True
+
+    # Time-bounded statements describe a temporary state, not a durable fact.
+    # v0.6 deliberately leaves them out of long-term memory rather than storing
+    # a record that would need a scheduler-driven expiry lifecycle.
+    return bool(
+        re.search(
+            r"\b(?:until|till|through)\s+(?:(?:next|this)\s+)?"
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+            r"tomorrow|tonight|the\s+end\s+of\s+(?:the\s+)?(?:day|week|month)|\d)",
+            lower,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def has_third_party_quoted_speech(message: str) -> bool:
+    """Return True when a quoted first-person claim is attributed to someone else."""
+    return bool(
+        re.search(
+            r"\b(?:my\s+(?:friend|brother|sister|parent|teacher|classmate)|"
+            r"he|she|they|someone|[A-Z][a-z]+)\s+"
+            r"(?:said|says|told\s+me|wrote)\s*[,;:]?\s*[\"'“‘]",
+            message,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def looks_like_question(message: str) -> bool:
@@ -648,6 +675,11 @@ class MemoryExtractor:
             return []
 
         if is_temporary_message(text):
+            return []
+
+        # Do not treat another person's quoted first-person statement as the
+        # user's own durable fact.
+        if has_third_party_quoted_speech(text):
             return []
 
         # Explicit interest / learning rejection (before goal ops; never touches goals)

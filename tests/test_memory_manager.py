@@ -12,7 +12,9 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -21,6 +23,7 @@ if str(SRC) not in sys.path:
 
 from memory.answers import grounded_answer
 from memory.embeddings import EmbeddingError, EmbeddingStore
+from memory.extractor import MemoryExtractor
 from memory.manager import SafeMemoryManager
 from memory.query_intent import QueryIntentDetector
 from memory.retriever import MemoryRetriever
@@ -37,6 +40,157 @@ def make_stack(tmpdir: str):
     intent = QueryIntentDetector(embedding_store)
     retriever = MemoryRetriever(store, embedding_store, intent_detector=intent)
     return manager, retriever, store
+
+
+class LearningExtractionTests(unittest.TestCase):
+    """Regression coverage for learning writes that does not require Ollama."""
+
+    def setUp(self):
+        self.extractor = MemoryExtractor()
+
+    def test_learning_creation_and_deletion_operations(self):
+        add_operations = self.extractor.extract("I am learning C")
+        self.assertEqual(len(add_operations), 1)
+        self.assertEqual(
+            add_operations[0],
+            {
+                "action": "ADD",
+                "category": "learning",
+                "fact_type": "learning",
+                "content": "User is learning C",
+                "value": "C",
+                "subject": "c",
+                "importance": "medium",
+            },
+        )
+
+        delete_operations = self.extractor.extract(
+            "I don't want to learn C anymore"
+        )
+        self.assertEqual(len(delete_operations), 1)
+        self.assertEqual(delete_operations[0]["action"], "DELETE_MATCH")
+        self.assertEqual(delete_operations[0]["category"], "learning")
+        self.assertEqual(delete_operations[0]["content_hint"], "C")
+        self.assertTrue(delete_operations[0]["explicit_change"])
+
+
+class MemoryLifecycleSafetyTests(unittest.TestCase):
+    """Offline acceptance tests for v0.6 memory safety and recovery."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.extractor = MemoryExtractor()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_temporary_today_statement_is_not_extracted(self):
+        self.assertEqual(
+            self.extractor.extract("I am learning Rust for today"),
+            [],
+        )
+
+    def test_time_bound_until_date_is_not_extracted(self):
+        self.assertEqual(
+            self.extractor.extract("I am learning Rust until Friday"),
+            [],
+        )
+
+    def test_direct_third_party_statement_is_not_stored_as_user_fact(self):
+        self.assertEqual(
+            self.extractor.extract("My friend is learning Flutter"),
+            [],
+        )
+
+    def test_quoted_third_party_speech_is_not_stored_as_user_fact(self):
+        self.assertEqual(
+            self.extractor.extract("My friend said, 'I am learning C'"),
+            [],
+        )
+
+    def test_restart_preserves_existing_memory_records(self):
+        path = os.path.join(self._tmpdir.name, "long_term_memory.json")
+        store = MemoryStore(path=path)
+        stored = store.add_memory(
+            category="learning",
+            fact_type="learning",
+            content="User is learning Python",
+            value="Python",
+            subject="python",
+            embedding=[0.1, 0.2],
+        )
+
+        restarted_store = MemoryStore(path=path)
+        restarted_store.load(ensure_embeddings=False)
+
+        self.assertEqual(restarted_store.get_by_id(stored["id"])["value"], "Python")
+        self.assertEqual(len(restarted_store.active_memories()), 1)
+
+    def test_new_memory_has_user_provenance_and_timestamps(self):
+        path = os.path.join(self._tmpdir.name, "long_term_memory.json")
+        store = MemoryStore(path=path)
+        stored = store.add_memory(
+            category="skill",
+            fact_type="skill",
+            content="User knows Python",
+            value="Python",
+            subject="python",
+            embedding=[0.1, 0.2],
+        )
+
+        self.assertEqual(stored["source"], "user_statement")
+        self.assertEqual(stored["confidence"], 1.0)
+        self.assertIsNotNone(datetime.fromisoformat(stored["created_at"]))
+        self.assertIsNotNone(datetime.fromisoformat(stored["updated_at"]))
+
+    def test_legacy_memory_receives_provenance_without_losing_content(self):
+        path = os.path.join(self._tmpdir.name, "long_term_memory.json")
+        legacy = {
+            "id": "memory_001",
+            "category": "skill",
+            "fact_type": "skill",
+            "content": "User knows Python",
+            "value": "Python",
+            "subject": "python",
+            "status": "active",
+            "embedding": [0.1, 0.2],
+            "embedding_version": config.EMBEDDING_TEXT_VERSION,
+        }
+        save_json(path, [legacy])
+
+        store = MemoryStore(path=path)
+        store.load(ensure_embeddings=False)
+        migrated = store.get_by_id("memory_001")
+
+        self.assertEqual(migrated["content"], "User knows Python")
+        self.assertEqual(migrated["source"], "user_statement")
+        self.assertEqual(migrated["confidence"], 1.0)
+        self.assertIsNotNone(datetime.fromisoformat(migrated["created_at"]))
+        self.assertIsNotNone(datetime.fromisoformat(migrated["updated_at"]))
+
+    def test_corrupt_file_is_backed_up_before_recovery(self):
+        path = os.path.join(self._tmpdir.name, "long_term_memory.json")
+        corrupt_payload = "{not valid json"
+        Path(path).write_text(corrupt_payload, encoding="utf-8")
+
+        self.assertEqual(load_json_list(path), [])
+        backups = list(Path(self._tmpdir.name).glob("long_term_memory.corrupt.*.json"))
+
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), corrupt_payload)
+        self.assertEqual(load_json_list(path), [])
+
+    def test_failed_atomic_replace_keeps_previous_memory_file_valid(self):
+        path = os.path.join(self._tmpdir.name, "long_term_memory.json")
+        original = [{"id": "memory_001", "content": "User knows Python"}]
+        replacement = [{"id": "memory_002", "content": "User knows Rust"}]
+        save_json(path, original)
+
+        with patch("memory.store.os.replace", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                save_json(path, replacement)
+
+        self.assertEqual(load_json_list(path), original)
 
 
 class MemoryV06Tests(unittest.TestCase):
