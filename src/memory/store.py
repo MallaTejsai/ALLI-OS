@@ -488,10 +488,12 @@ class MemoryStore:
         self,
         path: Optional[str] = None,
         embedding_store: Optional[EmbeddingStore] = None,
+        skip_embeddings: bool = False,
     ):
         self.path = path or config.LONG_TERM_MEMORY_FILE
         self.embedding_store = embedding_store or EmbeddingStore()
         self.memories: list[dict] = []
+        self.skip_embeddings = skip_embeddings
 
     def load(self, *, ensure_embeddings: bool = True) -> list[dict]:
         raw = load_json_list(self.path)
@@ -522,6 +524,43 @@ class MemoryStore:
             strip_temporal_suffix,
             normalize_goal_text,
         )
+
+        for memory in self.memories:
+            # Phase 1: Populate new schema fields for records missing them
+            if "entity" not in memory:
+                memory["entity"] = {
+                    "name": "user",
+                    "type": "self",
+                    "id": None,
+                }
+                changed = True
+
+            if "relationships" not in memory:
+                memory["relationships"] = []
+                changed = True
+
+            if "provenance" not in memory:
+                source = memory.get("source", "user_statement")
+                memory["provenance"] = {
+                    "created_by": "user",
+                    "message_id": None,
+                    "reason": source if isinstance(source, str) else "user_statement",
+                }
+                changed = True
+
+            if "temporal" not in memory:
+                created_at = memory.get("created_at", now)
+                expires_at = memory.get("expires_at")
+                memory["temporal"] = {
+                    "valid_from": created_at if isinstance(created_at, str) else now,
+                    "valid_until": expires_at if isinstance(expires_at, str) else None,
+                    "recurring": False,
+                }
+                changed = True
+
+            if "schema_version" not in memory:
+                memory["schema_version"] = config.SCHEMA_VERSION
+                changed = True
 
         for memory in self.memories:
             if "id" not in memory or not memory["id"]:
@@ -859,6 +898,10 @@ class MemoryStore:
         expires_at: Optional[str] = None,
         temporal_hint: Optional[str] = None,
         priority: Optional[str] = None,
+        entity_name: str = "user",
+        entity_type: str = "self",
+        entity_id: Optional[str] = None,
+        relationships: Optional[list[dict]] = None,
     ) -> dict:
         now = utc_now_iso()
         category = category if category in config.VALID_CATEGORIES else "other"
@@ -899,7 +942,7 @@ class MemoryStore:
             subject,
         )
 
-        if embedding is None:
+        if embedding is None and not self.skip_embeddings:
             embedding = self.embedding_store.generate_embedding(
                 build_embedding_text(category, fact_type, content)
             )
@@ -923,6 +966,23 @@ class MemoryStore:
             "updated_at": now,
             "source": source,
             "confidence": float(confidence),
+            "entity": {
+                "name": entity_name or "user",
+                "type": entity_type or "self",
+                "id": entity_id,
+            },
+            "relationships": relationships or [],
+            "provenance": {
+                "created_by": "user",
+                "message_id": None,
+                "reason": source or "user_statement",
+            },
+            "temporal": {
+                "valid_from": now,
+                "valid_until": expires_at,
+                "recurring": False,
+            },
+            "schema_version": config.SCHEMA_VERSION,
         }
         if expires_at:
             memory["expires_at"] = expires_at
@@ -1016,9 +1076,10 @@ class MemoryStore:
             )
 
         if content_changed or fact_type is not None or category is not None:
-            memory["embedding"] = self.embedding_store.generate_embedding(
-                self._embedding_text_for(memory)
-            )
+            if not self.skip_embeddings:
+                memory["embedding"] = self.embedding_store.generate_embedding(
+                    self._embedding_text_for(memory)
+                )
             memory["embedding_version"] = config.EMBEDDING_TEXT_VERSION
 
         memory["status"] = "active"

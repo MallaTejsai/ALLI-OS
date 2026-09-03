@@ -490,8 +490,8 @@ def _personal_overview_answer(memories: list[dict]) -> str:
         "preference": "Preferences",
         "project": "Projects",
         "routine": "Habits",
-        "task": "Tasks",
         "priority": "Priority",
+        "possession": "Possessions",
     }
 
     for category, label in labels.items():
@@ -503,7 +503,9 @@ def _personal_overview_answer(memories: list[dict]) -> str:
             continue
 
         if category == "preference":
-            lines.append(f"- {label}: {_preference_answer(category_memories)}")
+            # Deduplicate preferences by subject, keeping the most recent
+            deduped = _deduplicate_preferences(category_memories)
+            lines.append(f"- {label}: {_preference_answer(deduped)}")
             continue
 
         values = [_display_value(memory) for memory in category_memories]
@@ -511,7 +513,18 @@ def _personal_overview_answer(memories: list[dict]) -> str:
         if values:
             lines.append(f"- {label}: {_join_natural(values)}")
 
-    known_categories = set(labels)
+    # Show active tasks separately (they are temporary, not persistent)
+    task_memories = [
+        memory for memory in memories
+        if memory.get("category") == "task"
+    ]
+    if task_memories:
+        task_values = [_display_value(memory) for memory in task_memories]
+        task_values = [value for value in task_values if value]
+        if task_values:
+            lines.append(f"- Active Tasks: {_join_natural(task_values)}")
+
+    known_categories = set(labels) | {"task"}
     for memory in memories:
         if memory.get("category") not in known_categories:
             content = str(memory.get("content", "")).strip()
@@ -519,6 +532,16 @@ def _personal_overview_answer(memories: list[dict]) -> str:
                 lines.append(f"- {content}")
 
     return "\n".join(lines)
+
+
+def _deduplicate_preferences(memories: list[dict]) -> list[dict]:
+    """Deduplicate preferences by subject, keeping the most recent (last written)."""
+    by_subject: dict[str, dict] = {}
+    for memory in memories:
+        subject = _display_value(memory)
+        if subject:
+            by_subject[subject] = memory
+    return list(by_subject.values())
 
 
 def llm_memory_system_prompt() -> str:

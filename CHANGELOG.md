@@ -10,6 +10,17 @@ Added:
 - Clear missing answers for unknown personal facts (e.g. favorite food).
 - Expanded automated v0.6 memory test suite (25+ cases + manual scenario bundle).
 - Migration repair for misclassified learning goals (`learn` content → `learning_goal`).
+- **Schema v6**: `entity` field (name, type, id) for scoped memories.
+- **Schema v6**: `relationships` field (predicate-object pairs) for structured knowledge.
+- **Schema v6**: `provenance` field (created_by, message_id, reason) for source tracking.
+- **Schema v6**: `temporal` field (valid_from, valid_until, recurring) for lifecycle management.
+- **Schema v6**: `schema_version` field for migration tracking.
+- Automatic migration of old records to populate new schema fields with sensible defaults.
+- **Phase 2**: Deterministic validation layer (`validation.py`) — rejects garbage, vague, temporal-only, and activity-phrase values before any memory write.
+- **Phase 3**: LLM-constrained structured extraction (`structured_extractor.py`) — replaces 1576-line regex extractor with structured JSON output.
+- **Phase 3**: Generic entity resolver (`entity_resolver.py`) — resolves entities by syntactic role, no hardcoded names.
+- **Phase 3**: Structured extractor integrates with old extractor as fallback — backward compatible.
+- **Phase 3**: 47 new tests (entity resolution, structured extraction, validation, integration) — all run without Ollama.
 
 Changed:
 - Memory updates archive previous active values instead of silently overwriting history.

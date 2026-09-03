@@ -13,6 +13,7 @@ from typing import Optional
 
 from . import config
 from .embeddings import EmbeddingError, EmbeddingStore, cosine_similarity
+from .query_entity import QueryEntity, resolve_query_entity
 
 
 def normalize_memory_query(query: str) -> str:
@@ -144,6 +145,12 @@ CONCEPT_PROTOTYPES: dict[str, list[str]] = {
         "What is the user focusing on right now?",
         "What is the user's top priority?",
     ],
+    "possession": [
+        "What does the user own or possess?",
+        "What device or item does the user have?",
+        "What possessions does the user have?",
+        "What phone or laptop does the user use?",
+    ],
     "personal_overview": [
         "What do you remember about the user overall?",
         "Summarize the stored personal facts about the user.",
@@ -174,16 +181,31 @@ CATEGORY_QUERY_CUES: dict[str, tuple[str, ...]] = {
     "learning": (r"\blearning\b", r"\bam i learning\b", r"\bwhat i(?:'m| am) learning\b", r"\bwant to learn\b"),
     "preference": (
     r"\bpreferences?\b",
-    r"\bwhat\s+(?:do\s+)?i\s+(?:like|dislike|enjoy|hate)\b",
-    r"\bwhat\s+don'?t\s+i\s+(?:like|enjoy)\b",
+    r"\bwhat\s+(?:\w+\s+)*(?:do\s+)?i\s+(?:like|dislike|enjoy|hate)\b",
+    r"\bwhat\s+(?:\w+\s+)*don'?t\s+i\s+(?:like|enjoy)\b",
     r"\bwhich\b.*\b(?:i\s+)?(?:like|dislike|enjoy|hate)\b",
+    r"\bfavou?rite\b",
 ),
     "interest": (r"\binterests?\b", r"\bhobb(?:y|ies)\b"),
     "education": (r"\bstud(?:ying|ing)\b", r"\bstud(?:y|ies)\b", r"\beducation\b", r"\bcollege\b", r"\bbackground\b", r"\bcourse\b", r"\bdiploma\b"),
+    "possession": (
+        r"\bwhat\s+(?:phone|mobile|laptop|computer|tablet|device|car|bike|watch|camera|earbuds|headphones|speaker|keyboard|mouse|monitor|tv|vehicle)\s+(?:do\s+)?i\s+(?:have|own|use)\b",
+        r"\bwhat\s+(?:do\s+)?i\s+(?:have|own)\b(?!.*\b(?:tomorrow|today|tonight|next|this)\b)",
+        r"\b(?:phone|mobile|laptop|computer|tablet|device|car|bike|watch|camera)\s+(?:do\s+)?i\s+(?:have|own)\b",
+        r"\bwhich\s+(?:phone|mobile|laptop|computer|tablet|device|car|bike|watch|camera)\s+(?:do\s+)?i\s+(?:have|own)\b",
+    ),
     "project": (r"\bprojects?\b", r"\bbuild(?:ing)?\b", r"\bcreating\b", r"\bdevelop(?:ing)?\b"),
     "habit": (r"\bhabits?\b", r"\broutines?\b"),
-    "task": (r"\btasks?\b", r"\bto[\s-]dos?\b", r"\bneed to do\b", r"\bhave\b.*?\b(?:tomorrow|tommorrow|today|tonight)\b"),
+    "task": (r"\btasks?\b", r"\bto[\s-]dos?\b", r"\bneed to do\b", r"\bhave\b.*?\b(?:tomorrow|tommorrow|today|tonight)\b", r"\bpreparing\s+for\b", r"\bstudying\s+for\b"),
     "priority": (r"\bpriority\b", r"\bpriorities\b", r"\bmain focus\b", r"\btop focus\b"),
+    "personal_overview": (
+        r"\btell\s+me\s+about\s+(?:myself|me)\b",
+        r"\bwhat\s+do\s+you\s+know\s+about\s+(?:me|myself)\b",
+        r"\bwhat\s+do\s+you\s+remember\s+about\s+(?:me|myself)\b",
+        r"\bwhat\s+can\s+you\s+tell\s+me\s+about\s+(?:me|myself)\b",
+        r"\bwho\s+am\s+i\b",
+        r"\bhow\s+am\s+i\b",
+    ),
 }
 
 
@@ -237,6 +259,11 @@ INTENT_FILTERS: dict[str, dict] = {
     "education": {
         "categories": {"education"},
         "fact_types": None,
+        "strict": True,
+    },
+    "possession": {
+        "categories": {"possession"},
+        "fact_types": {"owned_item"},
         "strict": True,
     },
     "project": {
@@ -297,6 +324,12 @@ class QueryIntent:
     needs_clarification: bool = False
     clarification_message: str = ""
 
+    # Phase 5: entity-scoped retrieval fields
+    entity: Optional[QueryEntity] = None
+    cardinality: str = "unknown"  # "singular" | "plural" | "unknown"
+    temporal_scope: Optional[str] = None  # "current" | "active" | "expired" | "historical" | "future" | None
+    is_personal: bool = True  # True = personal memory query, False = general knowledge
+
     @property
     def label(self) -> str:
         return self.primary
@@ -304,6 +337,18 @@ class QueryIntent:
     @property
     def is_multi(self) -> bool:
         return len(self.requested) > 1
+
+    @property
+    def entity_name(self) -> Optional[str]:
+        """Return the canonical entity name for filtering, or None."""
+        if self.entity and self.entity.is_resolved:
+            return self.entity.name
+        return None
+
+    @property
+    def is_entity_scoped(self) -> bool:
+        """True if the query has a resolved entity filter."""
+        return self.entity is not None and self.entity.is_resolved
 
 
 class QueryIntentDetector:
@@ -342,6 +387,12 @@ class QueryIntentDetector:
         raw = (query or "").strip()
         normalized = normalize_memory_query(raw)
         preference_polarity = self._detect_preference_polarity(normalized)
+
+        # Phase 5: resolve entity and detect cardinality early
+        query_entity = self._resolve_query_entity(normalized)
+        cardinality = self._detect_cardinality(normalized)
+        temporal_scope = self._detect_temporal_scope(normalized)
+
         if not normalized:
             return QueryIntent(
                 primary="unknown",
@@ -349,6 +400,10 @@ class QueryIntentDetector:
                 is_memory_read=False,
                 is_general_knowledge=True,
                 normalized_query=normalized,
+                entity=query_entity,
+                cardinality=cardinality,
+                temporal_scope=temporal_scope,
+                is_personal=False,
             )
 
         # Forecasts are not reads of today's stored profile.  In particular,
@@ -360,6 +415,10 @@ class QueryIntentDetector:
                 is_memory_read=False,
                 is_general_knowledge=True,
                 normalized_query=normalized,
+                entity=query_entity,
+                cardinality=cardinality,
+                temporal_scope=temporal_scope,
+                is_personal=False,
             )
 
         # These ask for advice or a relationship to an unnamed object, not a
@@ -379,6 +438,10 @@ class QueryIntentDetector:
                     normalized_query=normalized,
                     needs_clarification=True,
                     clarification_message=clarification,
+                    entity=query_entity,
+                    cardinality=cardinality,
+                    temporal_scope=temporal_scope,
+                    is_personal=False,
                 )
             return QueryIntent(
                 primary="unknown",
@@ -386,17 +449,30 @@ class QueryIntentDetector:
                 is_memory_read=False,
                 is_general_knowledge=True,
                 normalized_query=normalized,
+                entity=query_entity,
+                cardinality=cardinality,
+                temporal_scope=temporal_scope,
+                is_personal=False,
             )
 
         # Clearly general-knowledge questions (math, definitions, facts)
         # must never enter the memory-read pipeline.
-        if self._is_clearly_general_knowledge(normalized):
+        # BUT: queries with personal pronouns are personal queries, not general
+        # knowledge, even if they happen to match general-knowledge patterns.
+        if (
+            self._is_clearly_general_knowledge(normalized)
+            and not self._has_personal_pronouns(normalized)
+        ):
             return QueryIntent(
                 primary="general_knowledge",
                 score=1.0,
                 is_memory_read=False,
                 is_general_knowledge=True,
                 normalized_query=normalized,
+                entity=query_entity,
+                cardinality=cardinality,
+                temporal_scope=temporal_scope,
+                is_personal=False,
             )
 
         try:
@@ -501,6 +577,10 @@ class QueryIntentDetector:
             filters=filters,
             requested=requested if is_memory else [],
             normalized_query=normalized,
+            entity=query_entity,
+            cardinality=cardinality,
+            temporal_scope=temporal_scope,
+            is_personal=is_memory and not is_general,
         )
     def _detect_preference_polarity(
         self,
@@ -561,6 +641,11 @@ class QueryIntentDetector:
                 normalized_query=normalized,
             )
 
+        # Phase 5: resolve entity and detect cardinality for cue-only path
+        query_entity = self._resolve_query_entity(normalized)
+        cardinality = self._detect_cardinality(normalized)
+        temporal_scope = self._detect_temporal_scope(normalized)
+
         # Prefer the first cued intent (order in CATEGORY_QUERY_CUES
         # reflects priority for overlapping matches).
         primary = cued[0]
@@ -576,6 +661,10 @@ class QueryIntentDetector:
             filters=filters,
             requested=requested,
             normalized_query=normalized,
+            entity=query_entity,
+            cardinality=cardinality,
+            temporal_scope=temporal_scope,
+            is_personal=True,
         )
 
     @staticmethod
@@ -585,12 +674,37 @@ class QueryIntentDetector:
             re.search(
                 r"\bwhat\s+is\s+\d+\s*[+\-*/]\s*\d+\b|"
                 r"\bwhat\s+is\s+the\s+(?:capital|population|currency|president|"
-                r"founder|ceo|meaning|definition|formula|speed)\b|"
+                r"founder|ceo|meaning|definition|formula|speed|definition\s+of)\b|"
                 r"\bwho\s+(?:invented|discovered|created|wrote|composed)\b|"
                 r"\bhow\s+(?:do|does|did|can|could|would|should)\s+"
                 r"(?:you|we|one|i|people|humans|computers|animals)\b|"
                 r"\bwhen\s+(?:was|did|were|is)\s+(?:the|a|an)\b|"
-                r"\bwhere\s+(?:is|are|was|were)\s+(?:the|a|an)\b",
+                r"\bwhere\s+(?:is|are|was|were)\s+(?:the|a|an)\b|"
+                r"\bhow\s+are\s+you\b|"
+                r"\bwhat\s+is\s+a\s+(?:computer|database|cpu|algorithm|"
+                r"programming|language|server|network|api|framework|"
+                r"machine\s+learning|artificial\s+intelligence|robot)\b|"
+                r"\bwhat\s+is\s+(?:python|java|javascript|c\+\+|ruby|go|rust|"
+                r"swift|kotlin|php|sql|html|css|react|angular|vue|node|"
+                r"django|flask|spring|rails|laravel|docker|kubernetes|"
+                r"linux|windows|macos|android|ios|git|github|aws|azure|gcp)\b|"
+                r"\bhow\s+does\s+(?:a\s+)?(?:computer|database|cpu|algorithm|"
+                r"programming|language|server|network|api|framework|"
+                r"machine\s+learning|artificial\s+intelligence|robot)\b",
+                normalized_query,
+            )
+        )
+
+    @staticmethod
+    def _has_personal_pronouns(normalized_query: str) -> bool:
+        """Check if the query contains personal pronouns indicating a personal query.
+
+        Queries with personal pronouns like 'my', 'I', 'me', 'myself' are
+        personal queries that should be answered from memory, not general knowledge.
+        """
+        return bool(
+            re.search(
+                r"\b(?:my\s|i\s|i'm\s|me\s|myself\b|about\s+me\b)",
                 normalized_query,
             )
         )
@@ -786,3 +900,77 @@ class QueryIntentDetector:
         ) >= (self.intent_threshold - 0.02):
             return ["name", "nickname"]
         return [intent.primary]
+
+    # -------------------------------------------------------------------
+    # Phase 5: Query understanding helpers
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_query_entity(normalized: str) -> QueryEntity:
+        """Resolve the entity referenced in the query."""
+        return resolve_query_entity(normalized)
+
+    @staticmethod
+    def _detect_cardinality(normalized: str) -> str:
+        """Detect whether the query asks for singular or plural results.
+
+        Returns "singular", "plural", or "unknown".
+        """
+        text = normalized.lower()
+
+        # Plural indicators
+        plural_cues = (
+            r"\bwhat\s+are\s+",
+            r"\btell\s+me\s+(?:all|my)\b",
+            r"\blist\s+",
+            r"\bwhat\s+goals?\s+do\s+i\s+have\b",
+            r"\bwhat\s+(?:are|were)\s+my\b",
+            r"\bwhat\s+(?:are|were)\s+the\b",
+            r"\bwhat\s+things?\b",
+            r"\bwhich\s+(?:are|were)\b",
+            r"\bwhat\s+courses?\b",
+        )
+        for pattern in plural_cues:
+            if re.search(pattern, text):
+                return "plural"
+
+        # Singular indicators
+        singular_cues = (
+            r"\bwhat\s+is\s+",
+            r"\bwhat\s+am\s+i\b",
+            r"\bwhat\s+do\s+i\s+(?:like|dislike|enjoy|hate|want|need|have|know)\b",
+            r"\bwhat\s+is\s+my\b",
+            r"\bwho\s+am\s+i\b",
+            r"\bhow\s+am\s+i\b",
+            r"\bwhat\s+is\s+the\b",
+            r"\bfavou?rite\b",
+            r"\bmain\s+(?:goal|priority|focus)\b",
+            r"\btop\s+(?:goal|priority|focus)\b",
+        )
+        for pattern in singular_cues:
+            if re.search(pattern, text):
+                return "singular"
+
+        return "unknown"
+
+    @staticmethod
+    def _detect_temporal_scope(normalized: str) -> Optional[str]:
+        """Detect temporal scope from the query.
+
+        Returns "current", "active", "expired", "historical", "future", or None.
+        """
+        text = normalized.lower()
+
+        if re.search(r"\b(?:currently|right\s+now|these\s+days|at\s+present)\b", text):
+            return "current"
+        if re.search(r"\b(?:previously|before|in\s+the\s+past|once)\b", text):
+            return "historical"
+        if re.search(r"\b(?:in\s+the\s+future|next\s+year|someday|eventually)\b", text):
+            return "future"
+        if re.search(r"\b(?:ever|at\s+any\s+point)\b", text):
+            return "active"
+        if re.search(r"\b(?:expired|outdated|old|former|past)\b", text):
+            return "expired"
+
+        # Default: current/active (no explicit temporal scope)
+        return None

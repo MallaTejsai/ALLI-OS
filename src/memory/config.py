@@ -28,6 +28,9 @@ DUPLICATE_SIMILARITY_THRESHOLD = 0.82
 # Embedding text recipe version — bump forces re-embed on load
 EMBEDDING_TEXT_VERSION = 4
 
+# Schema version — bump triggers migration on load
+SCHEMA_VERSION = 6
+
 # Optional debug (also ALLI_MEMORY_DEBUG=1)
 MEMORY_DEBUG = False
 
@@ -56,6 +59,7 @@ VALID_CATEGORIES = frozenset({
     "routine",
     "task",
     "priority",
+    "possession",
     "other",
 })
 

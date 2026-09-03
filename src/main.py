@@ -171,6 +171,21 @@ def print_memory_debug(retriever: MemoryRetriever, intent, answer_source: str) -
         reverse=True,
     )[:5]
     print(f"  → intent scores: {top_scores}")
+    # Phase 5: entity and cardinality diagnostics
+    entity = intent.entity
+    if entity:
+        entity_desc = f"{entity.name}" if entity.is_resolved else "unresolved"
+        if entity.relation_to_user:
+            entity_desc += f" ({entity.relation_to_user})"
+        print(f"  → entity: {entity_desc} (type={entity.entity_type})")
+    else:
+        print(f"  → entity: none")
+    print(f"  → cardinality: {intent.cardinality}")
+    print(f"  → is_personal: {intent.is_personal}")
+    # Filter diagnostics
+    filter_diag = debug.get("filter_diagnostics", {})
+    if filter_diag:
+        print(f"  → filter: {filter_diag.get('total_active', '?')} active → {filter_diag.get('after_entity_filter', '?')} after entity filter")
     print(f"  → retrieved candidates: {len(debug.get('candidates', []))}")
     for item in debug.get("selected", []):
         print(

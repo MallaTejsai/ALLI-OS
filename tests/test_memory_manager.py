@@ -34,7 +34,14 @@ from memory import config
 def make_stack(tmpdir: str):
     path = os.path.join(tmpdir, "long_term_memory.json")
     embedding_store = EmbeddingStore()
-    store = MemoryStore(path=path, embedding_store=embedding_store)
+    # Try to use real embeddings when Ollama is available
+    ollama_available = False
+    try:
+        embedding_store.verify_model()
+        ollama_available = True
+    except EmbeddingError:
+        pass
+    store = MemoryStore(path=path, embedding_store=embedding_store, skip_embeddings=not ollama_available)
     store.load(ensure_embeddings=False)
     manager = SafeMemoryManager(store)
     intent = QueryIntentDetector(embedding_store)
@@ -61,6 +68,8 @@ class LearningExtractionTests(unittest.TestCase):
                 "value": "C",
                 "subject": "c",
                 "importance": "medium",
+                "entity_name": "user",
+                "entity_type": "self",
             },
         )
 
@@ -2539,7 +2548,8 @@ class CueFallbackTests(unittest.TestCase):
 
     def test_R14_how_are_you_not_memory(self):
         r = self.detector.detect("how are you")
-        self.assertEqual(r.primary, "unknown")
+        # "How are you" is now classified as general knowledge
+        self.assertIn(r.primary, ("unknown", "general_knowledge"))
         self.assertFalse(r.is_memory_read)
 
     def test_R15_education_query_cannot_retrieve_learning(self):
@@ -2631,6 +2641,13 @@ class CategoryIsolationTests(unittest.TestCase):
 
 class ManualFailureRegressionTests(unittest.TestCase):
     """Regression tests for the 9 manual-testing failures."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            EmbeddingStore().verify_model()
+        except EmbeddingError as error:
+            raise unittest.SkipTest(str(error)) from error
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -3487,6 +3504,1313 @@ class InvalidNotingRegressionTests(unittest.TestCase):
         intent = self.intent_detector.detect("What is my goal?")
         self.assertTrue(intent.is_memory_read)
         self.assertIn("goal", intent.requested)
+
+
+class SchemaV6Tests(unittest.TestCase):
+    """Tests for v0.6 schema fields: entity, relationships, provenance, temporal."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_new_memory_has_entity_field(self):
+        """Every new memory has entity with name, type, id."""
+        results = self.manager.process_user_message("I like Python")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIn("entity", memory)
+        self.assertEqual(memory["entity"]["name"], "user")
+        self.assertEqual(memory["entity"]["type"], "self")
+        self.assertIsNone(memory["entity"]["id"])
+
+    def test_new_memory_has_relationships_field(self):
+        """Every new memory has relationships list."""
+        results = self.manager.process_user_message("I like Python")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIn("relationships", memory)
+        self.assertIsInstance(memory["relationships"], list)
+
+    def test_new_memory_has_provenance_field(self):
+        """Every new memory has provenance with created_by, message_id, reason."""
+        results = self.manager.process_user_message("I like Python")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIn("provenance", memory)
+        self.assertEqual(memory["provenance"]["created_by"], "user")
+        self.assertIsNone(memory["provenance"]["message_id"])
+        self.assertEqual(memory["provenance"]["reason"], "user_statement")
+
+    def test_new_memory_has_temporal_field(self):
+        """Every new memory has temporal with valid_from, valid_until, recurring."""
+        results = self.manager.process_user_message("I like Python")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIn("temporal", memory)
+        self.assertIn("valid_from", memory["temporal"])
+        self.assertIsNone(memory["temporal"]["valid_until"])
+        self.assertFalse(memory["temporal"]["recurring"])
+
+    def test_new_memory_has_schema_version(self):
+        """Every new memory has schema_version field."""
+        results = self.manager.process_user_message("I like Python")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIn("schema_version", memory)
+        self.assertEqual(memory["schema_version"], config.SCHEMA_VERSION)
+
+    def test_task_memory_has_temporal_valid_until(self):
+        """Task with temporal hint gets valid_until in temporal field."""
+        results = self.manager.process_user_message("I have exam tomorrow")
+        memory = self.store.get_by_id(results[0]["memory_id"])
+        self.assertIsNotNone(memory["temporal"]["valid_until"])
+        self.assertIsNotNone(memory.get("expires_at"))
+
+    def test_migration_populates_entity_on_old_records(self):
+        """Old records without entity get default entity on load."""
+        old_memory = {
+            "id": "memory_old",
+            "category": "skill",
+            "fact_type": "skill",
+            "content": "User knows Python",
+            "value": "Python",
+            "subject": "python",
+            "importance": "medium",
+            "status": "active",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "source": "user_statement",
+            "confidence": 1.0,
+        }
+        self.store.memories.append(old_memory)
+        self.store.save()
+
+        store2 = MemoryStore(path=self.store.path, embedding_store=self.store.embedding_store)
+        store2.load(ensure_embeddings=False)
+        migrated = store2.get_by_id("memory_old")
+        self.assertIn("entity", migrated)
+        self.assertEqual(migrated["entity"]["name"], "user")
+        self.assertEqual(migrated["entity"]["type"], "self")
+
+    def test_migration_populates_provenance_on_old_records(self):
+        """Old records without provenance get default provenance on load."""
+        old_memory = {
+            "id": "memory_old2",
+            "category": "preference",
+            "fact_type": "like",
+            "content": "User likes tea",
+            "value": "like",
+            "subject": "tea",
+            "importance": "medium",
+            "status": "active",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "source": "user_statement",
+            "confidence": 1.0,
+        }
+        self.store.memories.append(old_memory)
+        self.store.save()
+
+        store2 = MemoryStore(path=self.store.path, embedding_store=self.store.embedding_store)
+        store2.load(ensure_embeddings=False)
+        migrated = store2.get_by_id("memory_old2")
+        self.assertIn("provenance", migrated)
+        self.assertEqual(migrated["provenance"]["created_by"], "user")
+        self.assertEqual(migrated["provenance"]["reason"], "user_statement")
+
+    def test_migration_populates_temporal_on_old_records(self):
+        """Old records without temporal get temporal with valid_from = created_at."""
+        old_memory = {
+            "id": "memory_old3",
+            "category": "learning",
+            "fact_type": "learning",
+            "content": "User is learning Rust",
+            "value": "Rust",
+            "subject": "rust",
+            "importance": "medium",
+            "status": "active",
+            "created_at": "2024-06-15T10:00:00",
+            "updated_at": "2024-06-15T10:00:00",
+            "source": "user_statement",
+            "confidence": 1.0,
+        }
+        self.store.memories.append(old_memory)
+        self.store.save()
+
+        store2 = MemoryStore(path=self.store.path, embedding_store=self.store.embedding_store)
+        store2.load(ensure_embeddings=False)
+        migrated = store2.get_by_id("memory_old3")
+        self.assertIn("temporal", migrated)
+        self.assertEqual(migrated["temporal"]["valid_from"], "2024-06-15T10:00:00")
+        self.assertIsNone(migrated["temporal"]["valid_until"])
+
+    def test_migration_preserves_existing_entity(self):
+        """Records that already have entity are not overwritten."""
+        old_memory = {
+            "id": "memory_existing",
+            "category": "preference",
+            "fact_type": "like",
+            "content": "Mom likes Java",
+            "value": "like",
+            "subject": "java",
+            "importance": "medium",
+            "status": "active",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "source": "user_statement",
+            "confidence": 1.0,
+            "entity": {"name": "mom", "type": "person", "id": None},
+        }
+        self.store.memories.append(old_memory)
+        self.store.save()
+
+        store2 = MemoryStore(path=self.store.path, embedding_store=self.store.embedding_store)
+        store2.load(ensure_embeddings=False)
+        migrated = store2.get_by_id("memory_existing")
+        self.assertEqual(migrated["entity"]["name"], "mom")
+        self.assertEqual(migrated["entity"]["type"], "person")
+
+
+class ValidationTests(unittest.TestCase):
+    """Tests for deterministic validation layer (Phase 2)."""
+
+    def setUp(self):
+        from memory.validation import (
+            validate_value, validate_subject, validate_content,
+            is_garbage, is_vague, is_temporal_only,
+            validate_memory_input, normalize_value, normalize_subject,
+        )
+        self.validate_value = validate_value
+        self.validate_subject = validate_subject
+        self.validate_content = validate_content
+        self.is_garbage = is_garbage
+        self.is_vague = is_vague
+        self.is_temporal_only = is_temporal_only
+        self.validate_memory_input = validate_memory_input
+        self.normalize_value = normalize_value
+        self.normalize_subject = normalize_subject
+
+    def test_garbage_detection_symbols_only(self):
+        """Pure symbols are garbage."""
+        self.assertTrue(self.is_garbage("*^%"))
+        self.assertTrue(self.is_garbage("!@#$"))
+        self.assertTrue(self.is_garbage("???"))
+
+    def test_garbage_detection_empty(self):
+        """Empty strings are garbage."""
+        self.assertTrue(self.is_garbage(""))
+        self.assertTrue(self.is_garbage("  "))
+
+    def test_not_garbage_normal_text(self):
+        """Normal text is not garbage."""
+        self.assertFalse(self.is_garbage("Python"))
+        self.assertFalse(self.is_garbage("machine learning"))
+        self.assertFalse(self.is_garbage("exam tomorrow"))
+
+    def test_vague_detection(self):
+        """Universal vague values are detected."""
+        self.assertTrue(self.is_vague("nothing"))
+        self.assertTrue(self.is_vague("something"))
+        self.assertTrue(self.is_vague("anything"))
+        self.assertTrue(self.is_vague("everything"))
+        self.assertTrue(self.is_vague("noting"))  # common misspelling
+
+    def test_not_vague_normal_text(self):
+        """Normal text is not vague."""
+        self.assertFalse(self.is_vague("Python"))
+        self.assertFalse(self.is_vague("machine learning"))
+
+    def test_temporal_only_detection(self):
+        """Temporal-only phrases without substance are detected."""
+        self.assertTrue(self.is_temporal_only("again"))
+        self.assertTrue(self.is_temporal_only("now"))
+        self.assertTrue(self.is_temporal_only("tomorrow"))
+        self.assertTrue(self.is_temporal_only("in 3 days"))
+
+    def test_not_temporal_only_with_substance(self):
+        """Phrases with substance are not temporal-only."""
+        self.assertFalse(self.is_temporal_only("exam tomorrow"))
+        self.assertFalse(self.is_temporal_only("Python"))
+
+    def test_validate_value_rejects_garbage(self):
+        """Validation rejects garbage values."""
+        valid, reason = self.validate_value("*^%", "skill")
+        self.assertFalse(valid)
+        self.assertIn("garbage", reason)
+
+    def test_validate_value_rejects_vague(self):
+        """Validation rejects vague values."""
+        valid, reason = self.validate_value("nothing", "goal")
+        self.assertFalse(valid)
+        self.assertIn("vague", reason)
+
+    def test_validate_value_rejects_temporal_only(self):
+        """Validation rejects temporal-only values."""
+        valid, reason = self.validate_value("tomorrow", "task")
+        self.assertFalse(valid)
+        self.assertIn("temporal", reason)
+
+    def test_validate_value_accepts_normal(self):
+        """Validation accepts normal values."""
+        valid, _ = self.validate_value("Python", "skill")
+        self.assertTrue(valid)
+
+    def test_validate_subject_rejects_garbage(self):
+        """Validation rejects garbage subjects."""
+        valid, reason = self.validate_subject("*^%", "preference")
+        self.assertFalse(valid)
+
+    def test_validate_subject_accepts_normal(self):
+        """Validation accepts normal subjects."""
+        valid, _ = self.validate_subject("python", "preference")
+        self.assertTrue(valid)
+
+    def test_validate_memory_input_full_check(self):
+        """Full validation check works end-to-end."""
+        result = self.validate_memory_input("Python", "python", "skill", "skill")
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.normalized_value, "Python")
+        self.assertEqual(result.normalized_subject, "python")
+
+    def test_validate_memory_input_rejects_garbage_value(self):
+        """Full validation rejects garbage value."""
+        result = self.validate_memory_input("*^%", "", "skill", "skill")
+        self.assertFalse(result.is_valid)
+        self.assertIn("garbage", result.reason)
+
+    def test_validate_memory_input_rejects_vague_goal(self):
+        """Full validation rejects vague goal value."""
+        result = self.validate_memory_input("nothing", "", "goal", "career_goal")
+        self.assertFalse(result.is_valid)
+
+    def test_normalize_value_strips_whitespace(self):
+        """Normalization strips extra whitespace."""
+        self.assertEqual(self.normalize_value("  Python  "), "Python")
+        self.assertEqual(self.normalize_value("machine  learning"), "machine learning")
+
+    def test_normalize_subject_lowercases(self):
+        """Normalization lowercases subjects."""
+        self.assertEqual(self.normalize_subject("Python"), "python")
+        self.assertEqual(self.normalize_subject("  Machine Learning  "), "machine learning")
+
+
+class EntityResolverTests(unittest.TestCase):
+    """Tests for generic entity resolution (no hardcoded names)."""
+
+    def test_self_reference_i_like(self):
+        """'I like Python' → entity is user/self."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("I like Python")
+        self.assertTrue(result.is_self)
+        self.assertEqual(result.entity_name, "user")
+        self.assertEqual(result.entity_type, "self")
+
+    def test_self_reference_my_name(self):
+        """'My name is Tejsai' → entity is user/self."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("My name is Tejsai")
+        self.assertTrue(result.is_self)
+        self.assertEqual(result.entity_name, "user")
+
+    def test_possessive_mom(self):
+        """'Mom's favourite colour is red' → entity is mom/person."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("Mom's favourite colour is red")
+        self.assertFalse(result.is_self)
+        self.assertEqual(result.entity_name, "mom")
+        self.assertEqual(result.entity_type, "person")
+        self.assertEqual(result.relation_to_user, "parent")
+
+    def test_possessive_friend(self):
+        """'My friend's name is Alex' → entity is friend/person."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("My friend's name is Alex")
+        self.assertFalse(result.is_self)
+        self.assertEqual(result.entity_name, "friend")
+        self.assertEqual(result.entity_type, "person")
+        self.assertEqual(result.relation_to_user, "friend")
+
+    def test_possessive_teacher(self):
+        """'The teacher's opinion matters' → entity is teacher/person."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("The teacher's opinion matters")
+        self.assertFalse(result.is_self)
+        self.assertEqual(result.entity_name, "teacher")
+        self.assertEqual(result.entity_type, "person")
+        self.assertEqual(result.relation_to_user, "teacher")
+
+    def test_possessive_arbitrary_entity(self):
+        """'Sarah's favourite food is pasta' → entity is sarah/person."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("Sarah's favourite food is pasta")
+        self.assertFalse(result.is_self)
+        self.assertEqual(result.entity_name, "sarah")
+        self.assertEqual(result.entity_type, "person")
+
+    def test_self_identification_i_am(self):
+        """'I am Tejsai' → entity is user/self with name."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("I am Tejsai")
+        self.assertTrue(result.is_self)
+        self.assertEqual(result.entity_name, "user")
+
+    def test_empty_message(self):
+        """Empty message → default self entity."""
+        from memory.entity_resolver import extract_entity
+        result = extract_entity("")
+        self.assertTrue(result.is_self)
+        self.assertEqual(result.entity_name, "user")
+
+
+class StructuredExtractorTests(unittest.TestCase):
+    """Tests for the structured extractor with mocked LLM responses."""
+
+    def setUp(self):
+        from memory.structured_extractor import StructuredExtractor, StructuredExtraction, StructuredOperation
+        from memory.extractor import MemoryExtractor
+        self.StructuredExtractor = StructuredExtractor
+        self.StructuredExtraction = StructuredExtraction
+        self.StructuredOperation = StructuredOperation
+        self.fallback = MemoryExtractor()
+
+    def test_parse_preference_like(self):
+        """Parse LLM response for 'I like Python'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "preference",
+                "fact_type": "like",
+                "content": "User likes Python",
+                "value": "like",
+                "subject": "python",
+                "polarity": "like",
+                "importance": "medium",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I like Python")
+        self.assertIsNotNone(extraction)
+        self.assertEqual(extraction.intent, "statement")
+        self.assertEqual(len(extraction.operations), 1)
+        op = extraction.operations[0]
+        self.assertEqual(op.action, "ADD")
+        self.assertEqual(op.category, "preference")
+        self.assertEqual(op.fact_type, "like")
+        self.assertEqual(op.entity_name, "user")
+
+    def test_parse_preference_dislike(self):
+        """Parse LLM response for 'I don't like Python'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": True,
+            "negation_target": "python",
+            "is_third_party": False,
+            "operations": [{
+                "action": "DELETE",
+                "category": "preference",
+                "fact_type": "like",
+                "content": "User dislikes Python",
+                "value": "dislike",
+                "subject": "python",
+                "polarity": "dislike",
+                "importance": "medium",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I don't like Python")
+        self.assertIsNotNone(extraction)
+        self.assertTrue(extraction.is_negation)
+        self.assertEqual(extraction.negation_target, "python")
+        op = extraction.operations[0]
+        self.assertEqual(op.action, "DELETE")
+        self.assertEqual(op.polarity, "dislike")
+
+    def test_parse_entity_mom_preference(self):
+        """Parse LLM response for 'Mom's favourite colour is red'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": True,
+            "operations": [{
+                "action": "ADD",
+                "category": "preference",
+                "fact_type": "like",
+                "content": "Mom's favourite colour is red",
+                "value": "like",
+                "subject": "favourite colour",
+                "polarity": "like",
+                "importance": "medium",
+                "confidence": 0.9,
+                "entity_name": "mom",
+                "entity_type": "person",
+                "relation_to_user": "parent",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "Mom's favourite colour is red")
+        self.assertIsNotNone(extraction)
+        self.assertTrue(extraction.is_third_party)
+        op = extraction.operations[0]
+        self.assertEqual(op.entity_name, "mom")
+        self.assertEqual(op.entity_type, "person")
+        self.assertEqual(op.relation_to_user, "parent")
+
+    def test_parse_goal(self):
+        """Parse LLM response for 'I want to become an AI engineer'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "goal",
+                "fact_type": "career_goal",
+                "content": "User wants to become an AI engineer",
+                "value": "AI engineer",
+                "subject": "ai engineer",
+                "importance": "high",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I want to become an AI engineer")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "goal")
+        self.assertEqual(op.fact_type, "career_goal")
+        self.assertEqual(op.importance, "high")
+
+    def test_parse_ambition(self):
+        """Parse LLM response for 'My ambition is to become a doctor'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "ambition",
+                "fact_type": "ambition",
+                "content": "User's ambition is to become a doctor",
+                "value": "doctor",
+                "subject": "doctor",
+                "importance": "high",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "My ambition is to become a doctor")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "ambition")
+        self.assertEqual(op.fact_type, "ambition")
+
+    def test_parse_dream(self):
+        """Parse LLM response for 'My dream is to become a doctor'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "dream",
+                "fact_type": "dream",
+                "content": "User's dream is to become a doctor",
+                "value": "doctor",
+                "subject": "doctor",
+                "importance": "high",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "My dream is to become a doctor")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "dream")
+        self.assertEqual(op.fact_type, "dream")
+
+    def test_parse_education(self):
+        """Parse LLM response for 'I am studying electronics in my diploma'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "education",
+                "fact_type": "studying",
+                "content": "User is studying electronics in diploma",
+                "value": "electronics",
+                "subject": "electronics",
+                "importance": "high",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I am studying electronics in my diploma")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "education")
+        self.assertEqual(op.fact_type, "studying")
+
+    def test_parse_learning(self):
+        """Parse LLM response for 'I am learning Python'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "learning",
+                "fact_type": "learning",
+                "content": "User is learning Python",
+                "value": "Python",
+                "subject": "python",
+                "importance": "medium",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I am learning Python")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "learning")
+        self.assertEqual(op.fact_type, "learning")
+
+    def test_parse_temporary(self):
+        """Parse LLM response for 'I have exam tomorrow'."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": True,
+            "temporal_hint": "tomorrow",
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "task",
+                "fact_type": "task",
+                "content": "User has exam tomorrow",
+                "value": "exam",
+                "subject": "exam",
+                "importance": "medium",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I have exam tomorrow")
+        self.assertIsNotNone(extraction)
+        self.assertTrue(extraction.is_temporary)
+        self.assertEqual(extraction.temporal_hint, "tomorrow")
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "task")
+
+    def test_parse_question(self):
+        """Parse LLM response for 'What is my goal?'."""
+        response = json.dumps({
+            "intent": "question",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "What is my goal?")
+        self.assertIsNotNone(extraction)
+        self.assertTrue(extraction.is_question)
+        self.assertEqual(len(extraction.operations), 0)
+
+    def test_parse_invalid_json(self):
+        """Handle invalid JSON from LLM."""
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response("not valid json {{{", "test")
+        self.assertIsNotNone(extraction)
+        self.assertIsNotNone(extraction.parse_error)
+
+    def test_parse_missing_fields(self):
+        """Handle missing required fields."""
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(json.dumps({"intent": "statement"}), "test")
+        self.assertIsNotNone(extraction)
+        self.assertIsNotNone(extraction.parse_error)
+
+    def test_parse_rejects_garbage_value(self):
+        """Reject operations with garbage values."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "skill",
+                "fact_type": "skill",
+                "content": "User knows *^%",
+                "value": "*^%",
+                "subject": "*^%",
+                "importance": "medium",
+                "confidence": 0.8,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I know *^%")
+        self.assertIsNotNone(extraction)
+        # Garbage value should be rejected by validation
+        self.assertEqual(len(extraction.operations), 0)
+
+    def test_parse_rejects_vague_goal(self):
+        """Reject operations with vague goal values."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "goal",
+                "fact_type": "career_goal",
+                "content": "User wants to become nothing",
+                "value": "nothing",
+                "subject": "nothing",
+                "importance": "high",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I want to become nothing")
+        self.assertIsNotNone(extraction)
+        # Vague value should be rejected by validation
+        self.assertEqual(len(extraction.operations), 0)
+
+    def test_to_dict_operation(self):
+        """StructuredOperation.to_dict produces correct format."""
+        op = self.StructuredOperation(
+            action="ADD",
+            category="preference",
+            fact_type="like",
+            content="User likes Python",
+            value="like",
+            subject="python",
+            polarity="like",
+            importance="medium",
+            confidence=0.95,
+            entity_name="user",
+            entity_type="self",
+        )
+        d = op.to_dict()
+        self.assertEqual(d["action"], "ADD")
+        self.assertEqual(d["category"], "preference")
+        self.assertEqual(d["preference_polarity"], "like")
+        self.assertEqual(d["preference_subject"], "python")
+
+    def test_fallback_to_regex(self):
+        """Structured extractor falls back to regex when LLM unavailable."""
+        extractor = self.StructuredExtractor(
+            model="nonexistent:999",
+            fallback_extractor=self.fallback,
+        )
+        # This should fall back to regex extraction
+        ops = extractor.extract("I like Python")
+        # Regex extractor should handle this
+        self.assertIsInstance(ops, list)
+
+    def test_multi_fact_compound(self):
+        """Parse LLM response with multiple operations in one message."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [
+                {
+                    "action": "ADD",
+                    "category": "preference",
+                    "fact_type": "like",
+                    "content": "User likes Python",
+                    "value": "like",
+                    "subject": "python",
+                    "polarity": "like",
+                    "importance": "medium",
+                    "confidence": 0.95,
+                    "entity_name": "user",
+                    "entity_type": "self",
+                },
+                {
+                    "action": "ADD",
+                    "category": "preference",
+                    "fact_type": "dislike",
+                    "content": "User dislikes Java",
+                    "value": "dislike",
+                    "subject": "java",
+                    "polarity": "dislike",
+                    "importance": "medium",
+                    "confidence": 0.9,
+                    "entity_name": "user",
+                    "entity_type": "self",
+                },
+            ],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I like Python but I don't like Java")
+        self.assertIsNotNone(extraction)
+        self.assertEqual(len(extraction.operations), 2)
+        self.assertEqual(extraction.operations[0].polarity, "like")
+        self.assertEqual(extraction.operations[1].polarity, "dislike")
+
+    def test_multi_entity_compound(self):
+        """Parse LLM response with facts about different entities."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": True,
+            "operations": [
+                {
+                    "action": "ADD",
+                    "category": "preference",
+                    "fact_type": "like",
+                    "content": "Mom likes Java",
+                    "value": "like",
+                    "subject": "java",
+                    "polarity": "like",
+                    "importance": "medium",
+                    "confidence": 0.9,
+                    "entity_name": "mom",
+                    "entity_type": "person",
+                    "relation_to_user": "parent",
+                },
+                {
+                    "action": "ADD",
+                    "category": "preference",
+                    "fact_type": "like",
+                    "content": "User likes Python",
+                    "value": "like",
+                    "subject": "python",
+                    "polarity": "like",
+                    "importance": "medium",
+                    "confidence": 0.95,
+                    "entity_name": "user",
+                    "entity_type": "self",
+                },
+            ],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(
+            response,
+            "Mom likes Java and I like Python",
+        )
+        self.assertIsNotNone(extraction)
+        self.assertEqual(len(extraction.operations), 2)
+        # Check entity separation
+        entities = {op.entity_name for op in extraction.operations}
+        self.assertEqual(entities, {"mom", "user"})
+
+    def test_replace_goal(self):
+        """Parse LLM response for goal replacement."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": True,
+            "negation_target": "doctor",
+            "is_third_party": False,
+            "operations": [{
+                "action": "REPLACE",
+                "category": "goal",
+                "fact_type": "career_goal",
+                "content": "User wants to become an engineer",
+                "value": "engineer",
+                "subject": "engineer",
+                "importance": "high",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+                "replaces_id": "memory_001",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(
+            response,
+            "I don't want to become a doctor anymore, I want to become an engineer",
+        )
+        self.assertIsNotNone(extraction)
+        self.assertTrue(extraction.is_negation)
+        op = extraction.operations[0]
+        self.assertEqual(op.action, "REPLACE")
+        self.assertEqual(op.replaces_id, "memory_001")
+
+    def test_cancel_task(self):
+        """Parse LLM response for task cancellation."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": True,
+            "is_negation": True,
+            "negation_target": "exam",
+            "is_third_party": False,
+            "operations": [{
+                "action": "CANCEL",
+                "category": "task",
+                "fact_type": "task",
+                "content": "User cancels exam",
+                "value": "exam",
+                "subject": "exam",
+                "importance": "medium",
+                "confidence": 0.9,
+                "entity_name": "user",
+                "entity_type": "self",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "I don't have exam tomorrow")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.action, "CANCEL")
+
+    def test_priority(self):
+        """Parse LLM response for priority statement."""
+        response = json.dumps({
+            "intent": "statement",
+            "is_temporary": False,
+            "is_negation": False,
+            "is_third_party": False,
+            "operations": [{
+                "action": "ADD",
+                "category": "priority",
+                "fact_type": "priority",
+                "content": "User's current main priority is ECET",
+                "value": "ECET",
+                "subject": "ecet",
+                "importance": "high",
+                "confidence": 0.95,
+                "entity_name": "user",
+                "entity_type": "self",
+                "priority": "main",
+            }],
+        })
+        extractor = self.StructuredExtractor(fallback_extractor=self.fallback)
+        extraction = extractor._parse_response(response, "My main priority is ECET")
+        self.assertIsNotNone(extraction)
+        op = extraction.operations[0]
+        self.assertEqual(op.category, "priority")
+        self.assertEqual(op.priority, "main")
+
+
+class IntegrationTests(unittest.TestCase):
+    """Integration tests for the full extraction pipeline with mocked LLM."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_old_extractor_still_works(self):
+        """Old regex extractor still works when structured extractor is disabled."""
+        # Without structured extractor, old extractor is used
+        results = self.manager.process_user_message("I like Python")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "added")
+
+    def test_structured_extractor_with_mock(self):
+        """Test structured extractor integration with mocked LLM."""
+        from memory.structured_extractor import StructuredExtractor, StructuredOperation
+
+        # Create a mock structured extractor that returns known results
+        class MockStructuredExtractor:
+            def extract(self, message):
+                if "like" in message.lower():
+                    return [{
+                        "action": "ADD",
+                        "category": "preference",
+                        "fact_type": "like",
+                        "content": "User likes Python",
+                        "value": "like",
+                        "subject": "python",
+                        "importance": "medium",
+                        "confidence": 0.95,
+                    }]
+                return []
+
+        # Create manager with mock structured extractor
+        from memory.structured_extractor import StructuredExtractor
+        mock_extractor = MockStructuredExtractor()
+        manager = SafeMemoryManager(
+            self.store,
+            structured_extractor=mock_extractor,
+            use_structured_extractor=True,
+        )
+        results = manager.process_user_message("I like Python")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "added")
+
+    def test_structured_extractor_fallback_on_error(self):
+        """Structured extractor falls back to old extractor on error."""
+        class FailingStructuredExtractor:
+            def extract(self, message):
+                raise Exception("LLM unavailable")
+
+        from memory.extractor import MemoryExtractor
+        failing_extractor = FailingStructuredExtractor()
+        manager = SafeMemoryManager(
+            self.store,
+            extractor=MemoryExtractor(),
+            structured_extractor=failing_extractor,
+            use_structured_extractor=True,
+        )
+        # Should fall back to old extractor
+        results = manager.process_user_message("I like Python")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "added")
+
+
+class TestCategoryMeta(unittest.TestCase):
+    """Phase 4: Category metadata drives generic behavior, not category names."""
+
+    def test_singleton_categories_detected(self):
+        from memory.manager import get_category_meta
+        self.assertTrue(get_category_meta("identity").is_singleton)
+        self.assertTrue(get_category_meta("priority").is_singleton)
+
+    def test_polarity_categories_detected(self):
+        from memory.manager import get_category_meta
+        self.assertTrue(get_category_meta("preference").has_polarity)
+        self.assertFalse(get_category_meta("skill").has_polarity)
+
+    def test_default_category_is_not_singleton(self):
+        from memory.manager import get_category_meta
+        for cat in ["skill", "interest", "learning", "education", "goal", "other"]:
+            self.assertFalse(get_category_meta(cat).is_singleton, f"{cat} should not be singleton")
+
+    def test_match_by_subject_for_skill(self):
+        from memory.manager import get_category_meta
+        self.assertEqual(get_category_meta("skill").match_by, "subject")
+
+    def test_match_by_content_for_goal(self):
+        from memory.manager import get_category_meta
+        self.assertEqual(get_category_meta("goal").match_by, "content")
+
+    def test_match_by_fact_type_for_identity(self):
+        from memory.manager import get_category_meta
+        self.assertEqual(get_category_meta("identity").match_by, "fact_type")
+
+
+class TestMemoryIdentity(unittest.TestCase):
+    """Phase 4: Canonical identity for deduplication/contradiction."""
+
+    def test_operation_identity_from_dict(self):
+        from memory.manager import operation_identity
+        op = {"entity_name": "user", "category": "preference", "fact_type": "like", "subject": "python"}
+        self.assertEqual(operation_identity(op), ("user", "preference", "like", "python"))
+
+    def test_operation_identity_infer_fact_type(self):
+        from memory.manager import operation_identity
+        op = {"entity_name": "user", "category": "skill", "content": "User knows Python"}
+        ident = operation_identity(op)
+        self.assertEqual(ident[0], "user")
+        self.assertEqual(ident[1], "skill")
+
+    def test_memory_identity_from_memory(self):
+        from memory.manager import memory_identity
+        mem = {
+            "entity": {"name": "user", "type": "self"},
+            "category": "preference",
+            "fact_type": "like",
+            "subject": "python",
+        }
+        self.assertEqual(memory_identity(mem), ("user", "preference", "like", "python"))
+
+    def test_entity_scoped_identity(self):
+        from memory.manager import operation_identity
+        op = {"entity_name": "sarah", "category": "preference", "fact_type": "like", "subject": "red"}
+        ident = operation_identity(op)
+        self.assertEqual(ident[0], "sarah")
+
+    def test_same_identity_true(self):
+        from memory.manager import same_identity
+        a = ("user", "preference", "like", "python")
+        b = ("user", "preference", "like", "python")
+        self.assertTrue(same_identity(a, b))
+
+    def test_same_identity_different_entity(self):
+        from memory.manager import same_identity
+        a = ("user", "preference", "like", "blue")
+        b = ("sarah", "preference", "like", "blue")
+        self.assertFalse(same_identity(a, b))
+
+
+class TestGenericValidationGate(unittest.TestCase):
+    """Phase 4: Validation is mandatory regardless of category."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_garbage_value_rejected_skill(self):
+        op = {"action": "ADD", "category": "skill", "content": "!!!", "fact_type": "skill", "importance": "medium"}
+        result = self.manager.apply_operation(op)
+        self.assertEqual(result["status"], "skipped")
+
+    def test_garbage_value_rejected_goal(self):
+        op = {"action": "ADD", "category": "goal", "content": "!!!", "fact_type": "goal", "importance": "high"}
+        result = self.manager.apply_operation(op)
+        self.assertEqual(result["status"], "skipped")
+
+    def test_vague_value_rejected(self):
+        op = {"action": "ADD", "category": "goal", "content": "User wants to become nothing", "fact_type": "goal", "importance": "high", "value": "nothing"}
+        result = self.manager.apply_operation(op)
+        self.assertEqual(result["status"], "skipped")
+
+    def test_temporal_only_rejected(self):
+        op = {"action": "ADD", "category": "task", "content": "tomorrow", "fact_type": "task", "importance": "medium"}
+        result = self.manager.apply_operation(op)
+        self.assertEqual(result["status"], "skipped")
+
+    def test_valid_skill_accepted(self):
+        op = {"action": "ADD", "category": "skill", "content": "User knows Python programming", "fact_type": "skill", "importance": "medium"}
+        result = self.manager.apply_operation(op)
+        self.assertEqual(result["status"], "added")
+
+
+class TestGenericSingleton(unittest.TestCase):
+    """Phase 4: Singleton pattern works for any singleton category generically."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_identity_singleton_updates(self):
+        op1 = {"action": "ADD", "category": "identity", "content": "User name is Alice", "fact_type": "name", "importance": "high", "value": "Alice"}
+        op2 = {"action": "ADD", "category": "identity", "content": "User name is Bob", "fact_type": "name", "importance": "high", "value": "Bob"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2, user_message="my name is Bob")
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+
+    def test_priority_singleton_updates(self):
+        op1 = {"action": "ADD", "category": "priority", "content": "Priority is math", "fact_type": "priority", "importance": "high", "value": "math"}
+        op2 = {"action": "ADD", "category": "priority", "content": "Priority is english", "fact_type": "priority", "importance": "high", "value": "english"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+
+    def test_identity_unchanged_when_same(self):
+        op = {"action": "ADD", "category": "identity", "content": "User name is Alice", "fact_type": "name", "importance": "high", "value": "Alice"}
+        r1 = self.manager.apply_operation(op)
+        op2 = {"action": "ADD", "category": "identity", "content": "User name is Alice", "fact_type": "name", "importance": "high", "value": "Alice"}
+        r2 = self.manager.apply_operation(op2, user_message="my name is Alice")
+        self.assertEqual(r2["status"], "unchanged")
+
+
+class TestGenericPolarityReversal(unittest.TestCase):
+    """Phase 4: Polarity reversal works generically for any polarity category."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_preference_like_to_dislike(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User likes coffee", "fact_type": "like", "importance": "medium", "value": "like", "subject": "coffee"}
+        op2 = {"action": "ADD", "category": "preference", "content": "User dislikes coffee", "fact_type": "dislike", "importance": "medium", "value": "dislike", "subject": "coffee"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+        self.assertTrue(r2.get("conflict_resolved"))
+
+    def test_preference_dislike_to_like(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User dislikes tea", "fact_type": "dislike", "importance": "medium", "value": "dislike", "subject": "tea"}
+        op2 = {"action": "ADD", "category": "preference", "content": "User likes tea", "fact_type": "like", "importance": "medium", "value": "like", "subject": "tea"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r2["status"], "updated")
+        self.assertTrue(r2.get("conflict_resolved"))
+
+    def test_preference_unchanged_same_polarity(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User likes coffee", "fact_type": "like", "importance": "medium", "value": "like", "subject": "coffee"}
+        op2 = {"action": "ADD", "category": "preference", "content": "User likes coffee", "fact_type": "like", "importance": "medium", "value": "like", "subject": "coffee"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r2["status"], "unchanged")
+
+
+class TestGenericEntityScoping(unittest.TestCase):
+    """Phase 4: Entity-scoped operations prevent cross-entity confusion."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_different_entities_coexist(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User likes blue", "fact_type": "like", "importance": "medium", "value": "like", "subject": "blue", "entity_name": "user"}
+        op2 = {"action": "ADD", "category": "preference", "content": "Sara likes red", "fact_type": "like", "importance": "medium", "value": "like", "subject": "red", "entity_name": "sara"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "added")
+        self.assertEqual(len(self.store.active_memories()), 2)
+
+    def test_same_entity_same_subject_updates(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User likes blue", "fact_type": "like", "importance": "medium", "value": "like", "subject": "blue", "entity_name": "user"}
+        op2 = {"action": "ADD", "category": "preference", "content": "User likes red", "fact_type": "like", "importance": "medium", "value": "like", "subject": "blue", "entity_name": "user"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+
+
+class TestGenericContradictionDetection(unittest.TestCase):
+    """Phase 4: Contradiction detection works generically."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_contradiction_reported_on_polarity_reversal(self):
+        op1 = {"action": "ADD", "category": "preference", "content": "User likes coffee", "fact_type": "like", "importance": "medium", "value": "like", "subject": "coffee"}
+        op2 = {"action": "ADD", "category": "preference", "content": "User dislikes coffee", "fact_type": "dislike", "importance": "medium", "value": "dislike", "subject": "coffee"}
+        self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertIn("contradiction", r2)
+
+    def test_no_contradiction_for_new_fact(self):
+        op1 = {"action": "ADD", "category": "skill", "content": "User knows Python", "fact_type": "skill", "importance": "medium", "value": "python", "subject": "python"}
+        op2 = {"action": "ADD", "category": "skill", "content": "User knows JavaScript", "fact_type": "skill", "importance": "medium", "value": "javascript", "subject": "javascript"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r2["status"], "added")
+        self.assertNotIn("contradiction", r2)
+
+
+class TestGenericSubjectMatch(unittest.TestCase):
+    """Phase 4: Subject-based upsert works across categories generically."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_skill_update_by_subject(self):
+        op1 = {"action": "ADD", "category": "skill", "content": "User knows Python", "fact_type": "skill", "importance": "medium", "value": "python", "subject": "python"}
+        op2 = {"action": "ADD", "category": "skill", "content": "User knows advanced Python", "fact_type": "skill", "importance": "high", "value": "advanced python", "subject": "python"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+
+    def test_learning_update_by_subject(self):
+        op1 = {"action": "ADD", "category": "learning", "content": "User is learning calculus", "fact_type": "learning", "importance": "medium", "value": "calculus", "subject": "calculus"}
+        op2 = {"action": "ADD", "category": "learning", "content": "User is learning advanced calculus", "fact_type": "learning", "importance": "high", "value": "advanced calculus", "subject": "calculus"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "updated")
+
+
+class TestGenericDelete(unittest.TestCase):
+    """Phase 4: DELETE_MATCH works generically."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_delete_by_content_hint(self):
+        op = {"action": "ADD", "category": "interest", "content": "User is interested in painting", "fact_type": "interest", "importance": "medium", "value": "painting", "subject": "painting"}
+        self.manager.apply_operation(op)
+        delete_op = {"action": "DELETE_MATCH", "category": "interest", "content_hints": ["painting"]}
+        r = self.manager.apply_operation(delete_op, user_message="I don't like painting anymore")
+        self.assertEqual(r["status"], "deleted")
+
+    def test_delete_nonexistent_skipped(self):
+        delete_op = {"action": "DELETE_MATCH", "category": "skill", "content_hints": ["nonexistent"]}
+        r = self.manager.apply_operation(delete_op, user_message="I stopped doing nonexistent")
+        self.assertEqual(r["status"], "skipped")
+
+
+class TestGenericContentMatch(unittest.TestCase):
+    """Phase 4: Content-based match works for goal categories."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.manager, self.retriever, self.store = make_stack(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_goal_unchanged_same_content(self):
+        op1 = {"action": "ADD", "category": "goal", "content": "User wants to become a doctor", "fact_type": "career_goal", "importance": "high", "value": "doctor"}
+        op2 = {"action": "ADD", "category": "goal", "content": "User wants to become a doctor", "fact_type": "career_goal", "importance": "high", "value": "doctor"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "unchanged")
+
+    def test_different_goals_coexist(self):
+        op1 = {"action": "ADD", "category": "goal", "content": "User wants to become a doctor", "fact_type": "career_goal", "importance": "high", "value": "doctor"}
+        op2 = {"action": "ADD", "category": "goal", "content": "User wants to become a teacher", "fact_type": "career_goal", "importance": "high", "value": "teacher"}
+        r1 = self.manager.apply_operation(op1)
+        r2 = self.manager.apply_operation(op2)
+        self.assertEqual(r1["status"], "added")
+        self.assertEqual(r2["status"], "added")
 
 
 if __name__ == "__main__":

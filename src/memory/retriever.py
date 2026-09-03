@@ -3,12 +3,36 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Optional
 
 from . import config
 from .embeddings import EmbeddingError, EmbeddingStore, cosine_similarity
 from .query_intent import INTENT_FILTERS, QueryIntent, QueryIntentDetector
 from .store import MemoryStore
+
+
+@dataclass
+class RetrievalResult:
+    """Structured result from memory retrieval."""
+    status: str = "ok"  # "ok", "not_found", "ambiguous", "unresolved_entity", "not_personal"
+    memories: list[dict] = field(default_factory=list)
+    selected: list[dict] = field(default_factory=list)
+    intent: Optional[QueryIntent] = None
+    grouped: Optional[dict[str, list[dict]]] = None
+    debug: Optional[dict] = None
+
+    @property
+    def has_results(self) -> bool:
+        """True if the result contains memories."""
+        if self.selected:
+            return True
+        return len(self.memories) > 0
+
+    @property
+    def is_ambiguous(self) -> bool:
+        """True if the result is ambiguous (multiple conflicting candidates)."""
+        return self.status == "ambiguous"
 
 
 class MemoryRetriever:
@@ -127,7 +151,12 @@ class MemoryRetriever:
         threshold = self.threshold if threshold is None else threshold
         max_results = self.max_results if max_results is None else max_results
 
+        # Use cardinality to limit results for singular queries
+        if intent and intent.cardinality == "singular":
+            max_results = min(max_results, 3)
+
         intent = intent or self.intent_detector.detect(question)
+        entity = getattr(intent, "entity", None)
         self.last_debug = {
             "query": question,
             "normalized_query": intent.normalized_query,
@@ -137,6 +166,14 @@ class MemoryRetriever:
             "intent_scores": dict(intent.scores),
             "is_memory_read": intent.is_memory_read,
             "is_general_knowledge": intent.is_general_knowledge,
+            "entity": {
+                "name": getattr(entity, "name", None) if entity else None,
+                "is_resolved": getattr(entity, "is_resolved", False) if entity else False,
+                "is_unresolved": getattr(entity, "is_unresolved", False) if entity else False,
+            } if entity else None,
+            "cardinality": getattr(intent, "cardinality", "unknown"),
+            "is_personal": getattr(intent, "is_personal", False),
+            "filter_diagnostics": {},
             "candidates": [],
             "selected": [],
         }
@@ -146,6 +183,18 @@ class MemoryRetriever:
             return []
 
         if intent.is_general_knowledge or not intent.is_memory_read:
+            return []
+
+        # Entity filtering: apply BEFORE semantic ranking
+        active = self._filter_by_entity(active, intent)
+        entity = getattr(intent, "entity", None)
+        if entity is not None:
+            self.last_debug["filter_diagnostics"]["entity_filter"] = {
+                "entity_name": getattr(entity, "name", None),
+                "memories_before_filter": len(self.store.active_memories()),
+                "memories_after_filter": len(active),
+            }
+        if not active:
             return []
 
         # An overview is intentionally broad: it summarizes active stored facts
@@ -246,11 +295,10 @@ class MemoryRetriever:
                     continue
 
             if strict and category_match:
-                # Once a memory-read intent has selected a strict category,
-                # return its current records.  Semantic similarity is too
-                # brittle for terse stored values such as "C" and for
-                # generic preference questions with no named subject.
-                effective_threshold = 0.0
+                if category in {"preference", "skill", "interest", "learning", "possession", "project", "habit", "task"}:
+                    effective_threshold = threshold - 0.15
+                else:
+                    effective_threshold = 0.0
             elif category_match:
                 effective_threshold = threshold
             else:
@@ -351,3 +399,64 @@ class MemoryRetriever:
         if base is None:
             return None
         return set(base)
+
+    def _filter_by_entity(
+        self, memories: list[dict], intent: QueryIntent
+    ) -> list[dict]:
+        """Filter memories by entity scope BEFORE semantic ranking.
+
+        - If intent has a resolved entity, only return memories matching that entity.
+        - If entity is unresolved, return empty (we can't determine scope).
+        - If entity is None (no entity detected), return all memories.
+        """
+        entity = getattr(intent, "entity", None)
+        if entity is None:
+            return memories
+
+        # Unresolved entity: block all results
+        if getattr(entity, "is_unresolved", False):
+            return []
+
+        entity_name = getattr(entity, "name", None)
+        if not entity_name or entity_name == "self":
+            entity_name = "user"
+
+        filtered = []
+        for memory in memories:
+            mem_entity = memory.get("entity", {})
+            if isinstance(mem_entity, dict):
+                mem_entity_name = mem_entity.get("name", "user")
+            else:
+                mem_entity_name = "user"
+            if mem_entity_name == entity_name:
+                filtered.append(memory)
+        return filtered
+
+    def retrieve_structured(
+        self, query: str, *, intent: Optional[QueryIntent] = None
+    ) -> RetrievalResult:
+        """Retrieve memories and return a structured RetrievalResult."""
+        if not query or not query.strip():
+            return RetrievalResult(status="not_found", memories=[])
+
+        intent = intent or self.detect_intent(query)
+
+        if not intent.is_memory_read:
+            return RetrievalResult(status="not_personal", memories=[], intent=intent)
+
+        entity = getattr(intent, "entity", None)
+        if entity is not None and getattr(entity, "is_unresolved", False):
+            return RetrievalResult(status="unresolved_entity", memories=[], intent=intent)
+
+        memories = self.retrieve_relevant_memories(query, intent=intent)
+
+        if not memories:
+            return RetrievalResult(status="not_found", memories=[], intent=intent)
+
+        return RetrievalResult(
+            status="found",
+            memories=memories,
+            selected=[{"memory": m} for m in memories],
+            intent=intent,
+            debug=self.last_debug,
+        )

@@ -30,6 +30,8 @@ def _normalize_goal_value(word: str) -> str:
 
 
 CHANGE_SIGNAL_PHRASES = (
+    "actually",
+    "in fact",
     "my goal changed",
     "i changed my goal",
     "my career goal changed",
@@ -70,6 +72,10 @@ CHANGE_SIGNAL_PHRASES = (
     "used to",
     "but now",
     "i no longer want you to remember",
+    "switched to",
+    "replaced",
+    "replaced with",
+    "i now",
 )
 
 TEMPORARY_PHRASES = (
@@ -88,6 +94,14 @@ TEMPORARY_PHRASES = (
     "i'm tired",
     "i have an exam",
     "i've got an exam",
+    "i am preparing for",
+    "i'm preparing for",
+    "preparing for my",
+    "studying for my",
+    "prepare for my",
+    "study for my",
+    "i want to prepare for",
+    "i want to study for",
 )
 
 DELETE_PATTERNS = (
@@ -144,11 +158,105 @@ def has_third_party_quoted_speech(message: str) -> bool:
         re.search(
             r"\b(?:my\s+(?:friend|brother|sister|parent|teacher|classmate)|"
             r"he|she|they|someone|[A-Z][a-z]+)\s+"
-            r"(?:said|says|told\s+me|wrote)\s*[,;:]?\s*[\"'“‘]",
+            r"(?:said|says|told\s+me|wrote)\s*[,;:]?\s*[\"'""'']",
             message,
             flags=re.IGNORECASE,
         )
     )
+
+
+def _is_uncertain_personal_intention(text: str) -> bool:
+    """Detect if a statement expresses uncertain personal intention.
+
+    Distinguishes uncertain personal intentions from general opinions:
+    - "I think Python is useful" → general opinion (not uncertain intention)
+    - "I think I want to learn Java" → uncertain personal intention
+    - "I believe I should become a doctor" → uncertain personal intention
+    - "I feel like I should learn Flutter" → uncertain personal intention
+
+    Returns True if the statement is an uncertain personal intention
+    that should not be stored as a definite fact.
+    """
+    lower = text.lower()
+
+    # Uncertainty signals that prefix personal intentions
+    uncertain_personal = re.search(
+        r"\b(?:i\s+think|i\s+believe|i\s+feel\s+like|i\s+feel\s+that|"
+        r"maybe\s+i|perhaps\s+i|possibly\s+i|i\s+might|i\s+could|"
+        r"not\s+sure\s+(?:if|i)|i'm\s+not\s+sure\s+(?:if|i)|"
+        r"i\s+am\s+not\s+sure\s+(?:if|i))\s+"
+        r"(?:want\s+to|wanna|should|would\s+like\s+to|plan\s+to|"
+        r"am\s+going\s+to|will\s+try\s+to|could\s+become|"
+        r"might\s+become|want\s+to\s+become|want\s+to\s+be|"
+        r"should\s+become|should\s+be)\b",
+        lower,
+    )
+    if uncertain_personal:
+        return True
+
+    # "I think I want to..." pattern (broader)
+    if re.search(r"\bi\s+think\s+i\s+(?:want|should|would|could|might|plan)\b", lower):
+        return True
+
+    # "I believe I want to..." pattern
+    if re.search(r"\bi\s+believe\s+i\s+(?:want|should|would|could|might|plan)\b", lower):
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Possession subject classification (generic, no hardcoded brands)
+# ---------------------------------------------------------------------------
+
+_DEVICE_KEYWORDS = {
+    "phone", "mobile", "laptop", "computer", "tablet", "device",
+    "watch", "earbuds", "headphones", "speaker", "keyboard", "mouse",
+    "monitor", "tv", "camera", "car", "bike", "motorcycle", "vehicle",
+}
+
+_EDUCATION_KEYWORDS = {
+    "diploma", "degree", "course", "college", "university", "school",
+    "bachelor", "master", "phd", "b.tech", "m.tech", "engineering",
+    "computer science", "cs", "certificate",
+}
+
+_SUBSTANCE_KEYWORDS = {
+    "coffee", "tea", "water", "juice", "beer", "wine", "drink",
+}
+
+
+def _classify_possession_subject(item: str) -> str:
+    """Classify a possession item into a generic subject category.
+
+    Returns a generic subject string for storage. No hardcoded brands/models.
+    """
+    lower = item.lower()
+
+    # Check device keywords
+    for kw in _DEVICE_KEYWORDS:
+        if kw in lower:
+            return kw
+
+    # Check education keywords
+    for kw in _EDUCATION_KEYWORDS:
+        if kw in lower:
+            return "education"
+
+    # Check substance keywords
+    for kw in _SUBSTANCE_KEYWORDS:
+        if kw in lower:
+            return kw
+
+    # Generic: use the first significant word as subject
+    words = re.findall(r"[a-z]+", lower)
+    # Filter out articles and common fillers
+    stop_words = {"a", "an", "the", "is", "was", "my", "your", "his", "her", "its", "our", "their"}
+    significant = [w for w in words if w not in stop_words and len(w) > 2]
+    if significant:
+        return significant[0]
+
+    return "item"
 
 
 def looks_like_question(message: str) -> bool:
@@ -694,20 +802,42 @@ class MemoryExtractor:
         if not text or looks_like_question(text):
             return []
 
+        # Extract entity information from the statement
+        from .entity_resolver import extract_entity
+        entity_extraction = extract_entity(text)
+        entity_name = "user"
+        entity_type = "self"
+        if entity_extraction.entities:
+            primary_entity = entity_extraction.entities[0]
+            entity_name = primary_entity.name
+            entity_type = primary_entity.entity_type
+
         # Task cancellation must be checked BEFORE is_temporary_message
         # to avoid silently dropping negated forms like
         # "I don't have any task tomorrow".
         if self._is_task_cancellation(text):
             cancel_op = self._extract_task_cancellation(text)
+            if cancel_op:
+                cancel_op["entity_name"] = entity_name
+                cancel_op["entity_type"] = entity_type
             return [cancel_op] if cancel_op else []
 
         if is_temporary_message(text):
             task_op = self._extract_task(text)
+            if task_op:
+                task_op["entity_name"] = entity_name
+                task_op["entity_type"] = entity_type
             return [task_op] if task_op else []
 
         # Do not treat another person's quoted first-person statement as the
         # user's own durable fact.
         if has_third_party_quoted_speech(text):
+            return []
+
+        # Uncertain personal intentions should not be stored as definite facts.
+        # "I think I want to learn Java" → reject (uncertain)
+        # "I think Python is useful" → allow (general opinion)
+        if _is_uncertain_personal_intention(text):
             return []
 
         # Explicit interest / learning rejection (before goal ops; never touches goals)
@@ -763,6 +893,35 @@ class MemoryExtractor:
                     p = p[4:].strip()
                 clauses.append(p)
 
+        # Expand clauses that contain "and" or "or" lists for preferences/skills/interests
+        # e.g., "I like Python and Java" → ["I like Python", "I like Java"]
+        expanded_clauses: list[str] = []
+        for clause in clauses:
+            lower_clause = clause.lower()
+            # Check if this is a preference/skill/interest statement with multiple items
+            if re.search(r"\b(?:i\s+)?(?:like|love|enjoy|dislike|hate)\s+", lower_clause):
+                match = re.search(
+                    r"\b(?:i\s+)?(?:like|love|enjoy|dislike|hate)\s+(.+)",
+                    clause,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    verb_match = re.search(
+                        r"\b(?:i\s+)?(like|love|enjoy|dislike|hate)\s+",
+                        clause,
+                        flags=re.IGNORECASE,
+                    )
+                    if verb_match:
+                        verb = verb_match.group(1)
+                        subject_part = match.group(1).strip().rstrip(".!?")
+                        items = split_list_items(subject_part)
+                        if len(items) > 1:
+                            for item in items:
+                                expanded_clauses.append(f"I {verb} {item}")
+                            continue
+            expanded_clauses.append(clause)
+        clauses = expanded_clauses
+
         operations: list[dict] = []
         for clause in clauses:
             if not clause:
@@ -777,13 +936,19 @@ class MemoryExtractor:
                 self._extract_ambition,
                 self._extract_dream,
                 self._extract_priority,
+                self._extract_possession,
             ):
                 operation = extractor(clause)
                 if not operation:
                     continue
                 if isinstance(operation, list):
+                    for op in operation:
+                        op["entity_name"] = entity_name
+                        op["entity_type"] = entity_type
                     operations.extend(operation)
                 else:
+                    operation["entity_name"] = entity_name
+                    operation["entity_type"] = entity_type
                     operations.append(operation)
 
         return operations
@@ -958,6 +1123,22 @@ class MemoryExtractor:
                 # preference subject (e.g. "I don't like anything").
                 if subject.lower() in {"anything", "nothing", "something", "everything"}:
                     return None
+                # Handle multiple values: "I like Python and Java"
+                items = split_list_items(subject)
+                if len(items) > 1:
+                    # Return first item; the caller (extract) will process remaining via clauses
+                    content = f"User dislikes {items[0]}"
+                    return {
+                        "action": "UPSERT",
+                        "category": "preference",
+                        "fact_type": "dislike",
+                        "content": content,
+                        "value": "dislike",
+                        "subject": normalize_preference_subject(items[0]),
+                        "importance": "medium",
+                        "preference_polarity": "dislike",
+                        "preference_subject": normalize_preference_subject(items[0]),
+                    }
                 content = f"User dislikes {subject}"
                 return {
                     "action": "UPSERT",
@@ -976,8 +1157,32 @@ class MemoryExtractor:
             r"\bi love\s+(.+)",
             r"\bi enjoy\s+(.+)",
             r"\bi prefer\s+(.+)",
+            r"\bmy\s+favou?rite\s+(\w+)\s+is\s+(.+)",
+            r"\bfavou?rite\s+(\w+)\s+is\s+(.+)",
         ]
         for pattern in positive_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                # Handle "My favourite X is Y" / "Favourite X is Y" patterns
+                if "favou?rite" in pattern:
+                    # Pattern has two groups: (category_word, value)
+                    if match.lastindex and match.lastindex >= 2:
+                        category_word = match.group(1).strip().rstrip(".!?")
+                        value = match.group(2).strip().rstrip(".!?")
+                        subject = normalize_preference_subject(f"{category_word} {value}")
+                        content = f"User likes {value}"
+                        return {
+                            "action": "UPSERT",
+                            "category": "preference",
+                            "fact_type": "like",
+                            "content": content,
+                            "value": "like",
+                            "subject": subject,
+                            "importance": "medium",
+                            "preference_polarity": "like",
+                            "preference_subject": subject,
+                        }
+                    continue
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 subject = match.group(1).strip().rstrip(".!?")
@@ -991,6 +1196,22 @@ class MemoryExtractor:
                 # preference subject (e.g. "I like nothing").
                 if subject.lower() in {"anything", "nothing", "something", "everything"}:
                     return None
+                # Handle multiple values: "I like Python and Java"
+                items = split_list_items(subject)
+                if len(items) > 1:
+                    # Return first item; the caller (extract) will process remaining via clauses
+                    content = f"User likes {items[0]}"
+                    return {
+                        "action": "UPSERT",
+                        "category": "preference",
+                        "fact_type": "like",
+                        "content": content,
+                        "value": "like",
+                        "subject": normalize_preference_subject(items[0]),
+                        "importance": "medium",
+                        "preference_polarity": "like",
+                        "preference_subject": normalize_preference_subject(items[0]),
+                    }
                 content = f"User likes {subject}"
                 return {
                     "action": "UPSERT",
@@ -1136,6 +1357,9 @@ class MemoryExtractor:
                 # Use normalization to catch common typos like "noting" → "nothing".
                 normalized = _normalize_goal_value(value_lower)
                 if normalized in {"nothing", "something", "anything", "everything"}:
+                    return None
+                # Also reject negation words and vague pronouns that cannot be goals.
+                if value_lower in {"no", "none", "no one", "nobody", "neither", "nor"}:
                     return None
                 # Also reject temporal phrases like "in future" where the
                 # extracted value consists of a preposition + temporal noun.
@@ -1291,6 +1515,115 @@ class MemoryExtractor:
 
         return None
 
+    def _extract_possession(self, text: str) -> Optional[dict]:
+        """Extract generic possession/device statements.
+
+        Matches patterns like:
+        - "I have an Oppo A53" → possession, device
+        - "I own a MacBook" → possession, device
+        - "I possess a laptop" → possession, device
+        - "I use an iPhone" → possession, device
+        - "My phone is an iPhone" → possession, device
+
+        Uses generic semantic structure, no hardcoded brands/models.
+        """
+        lower = text.lower()
+
+        # "I have X" — but NOT "I have X tomorrow" (task) or "I have to X" (goal)
+        have_match = re.search(
+            r"\bi (?:have|have got|ve got)\s+(?:an?\s+)?(.+)",
+            lower,
+        )
+        if have_match:
+            item = have_match.group(1).strip().rstrip(".!?")
+            # Reject if followed by temporal markers (task) or "to" (obligation)
+            if re.search(r"\b(?:tomorrow|today|tonight|next|this|due|deadline)\b", item):
+                return None
+            if re.search(r"\bto\s+(?:do|go|finish|complete|submit|pay|buy|get)\b", item):
+                return None
+            # Reject abstract concepts (feelings, ideas, thoughts, etc.)
+            abstract_concepts = {
+                "feeling", "feelings", "idea", "ideas", "thought", "thoughts",
+                "opinion", "opinions", "belief", "beliefs", "sense", "impression",
+                "feeling that", "idea that", "thought that", "feeling like",
+            }
+            if any(item.startswith(concept) or item == concept for concept in abstract_concepts):
+                return None
+            if len(item) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "possession",
+                    "fact_type": "owned_item",
+                    "content": f"User has {item}",
+                    "value": item,
+                    "subject": _classify_possession_subject(item),
+                    "importance": "medium",
+                }
+
+        # "I own X"
+        own_match = re.search(
+            r"\bi (?:own|possess)\s+(?:an?\s+)?(.+)",
+            lower,
+        )
+        if own_match:
+            item = own_match.group(1).strip().rstrip(".!?")
+            if len(item) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "possession",
+                    "fact_type": "owned_item",
+                    "content": f"User owns {item}",
+                    "value": item,
+                    "subject": _classify_possession_subject(item),
+                    "importance": "medium",
+                }
+
+        # "I use X"
+        use_match = re.search(
+            r"\bi (?:use|am using)\s+(?:an?\s+)?(.+)",
+            lower,
+        )
+        if use_match:
+            item = use_match.group(1).strip().rstrip(".!?")
+            if len(item) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "possession",
+                    "fact_type": "owned_item",
+                    "content": f"User uses {item}",
+                    "value": item,
+                    "subject": _classify_possession_subject(item),
+                    "importance": "medium",
+                }
+
+        # "My X is Y" — e.g., "My phone is an iPhone"
+        my_is_match = re.search(
+            r"\bmy\s+(\w+)\s+is\s+(?:an?\s+)?(.+)",
+            lower,
+        )
+        if my_is_match:
+            subject_word = my_is_match.group(1).strip()
+            item = my_is_match.group(2).strip().rstrip(".!?")
+            # Only treat as possession if the subject is a device/item category
+            device_subjects = {
+                "phone", "mobile", "laptop", "computer", "tablet",
+                "device", "watch", "earbuds", "headphones", "speaker",
+                "keyboard", "mouse", "monitor", "tv", "camera",
+                "car", "bike", "motorcycle", "vehicle",
+            }
+            if subject_word in device_subjects and len(item) >= 2:
+                return {
+                    "action": "ADD",
+                    "category": "possession",
+                    "fact_type": "owned_item",
+                    "content": f"User's {subject_word} is {item}",
+                    "value": item,
+                    "subject": subject_word,
+                    "importance": "medium",
+                }
+
+        return None
+
     def _extract_task(self, text: str) -> Optional[dict]:
         """Extract temporary event/task with time reference.
 
@@ -1299,6 +1632,10 @@ class MemoryExtractor:
         - "i have a test next week"
         - "i have an appointment today"
         - "i have deadline friday"
+        - "i am studying for my mid exam"
+        - "i am preparing for my exam"
+        - "i have a meeting at 3 PM"
+        - "i have a class at 10 AM"
         """
         lower = text.lower()
 
@@ -1315,6 +1652,56 @@ class MemoryExtractor:
             flags=re.IGNORECASE,
         )
         if not task_match:
+            # Match "have X at TIME" patterns (e.g., "have a meeting at 3 PM")
+            time_match = re.search(
+                r"\b(?:i\s+)?(?:have|got|hav?e)\s+(?:an?\s+)?(.+?)"
+                r"\s+(?:at\s+\d{1,2}(?:\s*(?:am|pm|a\.m\.|p\.m\.))?|"
+                r"at\s+(?:noon|midnight|morning|afternoon|evening))\b",
+                lower,
+                flags=re.IGNORECASE,
+            )
+            if time_match:
+                event_text = time_match.group(1).strip().rstrip(".!?")
+                if len(event_text) >= 2:
+                    # Extract the full time reference
+                    full_time = re.search(
+                        r"\b(?:at\s+\d{1,2}(?:\s*(?:am|pm|a\.m\.|p\.m\.))?|"
+                        r"at\s+(?:noon|midnight|morning|afternoon|evening))\b",
+                        lower,
+                        flags=re.IGNORECASE,
+                    )
+                    temporal_hint = full_time.group(0).strip() if full_time else None
+                    content = f"User has {event_text} {temporal_hint or ''}".strip()
+                    return {
+                        "action": "ADD",
+                        "category": "task",
+                        "fact_type": "task",
+                        "content": content,
+                        "value": event_text,
+                        "subject": event_text,
+                        "importance": "medium",
+                        "temporal_hint": temporal_hint,
+                    }
+            # Match "studying for X" / "preparing for X" patterns (temporary tasks)
+            prep_match = re.search(
+                r"\b(?:i(?:'m| am)\s+)?(?:studying|preparing)\s+for\s+(?:my\s+)?(.+)|"
+                r"\b(?:i\s+want\s+to\s+)?(?:prepare|studying)\s+for\s+(?:my\s+)?(.+)",
+                lower,
+                flags=re.IGNORECASE,
+            )
+            if prep_match:
+                event_text = (prep_match.group(1) or prep_match.group(2) or "").strip().rstrip(".!?")
+                if len(event_text) >= 2:
+                    content = f"User is preparing for {event_text}"
+                    return {
+                        "action": "ADD",
+                        "category": "task",
+                        "fact_type": "task",
+                        "content": content,
+                        "value": event_text,
+                        "subject": event_text,
+                        "importance": "medium",
+                    }
             return None
 
         event_text = task_match.group(1).strip().rstrip(".!?")
@@ -1517,7 +1904,7 @@ class MemoryExtractor:
                 formal_signals = re.search(
                     r"\b(diploma|degree|course|college|university|school|"
                     r"bachelor|master|phd|b\.?tech|m\.?tech|engineering|"
-                    r"computer science|cs|ecet|first year|second year|"
+                    r"computer science|cs|cse|ecet|first year|second year|"
                     r"third year|fourth year|semester|year)\b",
                     topic,
                     flags=re.IGNORECASE,

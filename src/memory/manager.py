@@ -36,6 +36,81 @@ def normalized_content(content: str) -> str:
     return " ".join(word for word in words if word not in ignored)
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: Category metadata and memory identity
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class CategoryMeta:
+    """Metadata that drives generic category behavior."""
+    name: str
+    is_singleton: bool = False
+    has_polarity: bool = False
+    match_by: str = "content"  # "content", "subject", or "fact_type"
+
+
+_CATEGORY_META: dict[str, CategoryMeta] = {
+    "identity": CategoryMeta("identity", is_singleton=True, match_by="fact_type"),
+    "name": CategoryMeta("name", is_singleton=True, match_by="fact_type"),
+    "nickname": CategoryMeta("nickname", is_singleton=True, match_by="fact_type"),
+    "priority": CategoryMeta("priority", is_singleton=True, match_by="content"),
+    "preference": CategoryMeta("preference", has_polarity=True, match_by="subject"),
+    "skill": CategoryMeta("skill", match_by="subject"),
+    "interest": CategoryMeta("interest", match_by="subject"),
+    "learning": CategoryMeta("learning", match_by="subject"),
+    "education": CategoryMeta("education", match_by="subject"),
+    "goal": CategoryMeta("goal", match_by="content"),
+    "ambition": CategoryMeta("ambition", match_by="content"),
+    "dream": CategoryMeta("dream", match_by="content"),
+    "possession": CategoryMeta("possession", match_by="subject"),
+    "project": CategoryMeta("project", match_by="content"),
+    "task": CategoryMeta("task", match_by="content"),
+    "habit": CategoryMeta("habit", match_by="subject"),
+    "other": CategoryMeta("other", match_by="content"),
+}
+
+
+def get_category_meta(category: str) -> CategoryMeta:
+    """Return metadata for a category, defaulting to non-singleton."""
+    return _CATEGORY_META.get(category, CategoryMeta(category))
+
+
+def operation_identity(op: dict) -> tuple[str, str, str, str]:
+    """Canonical identity tuple from an operation dict.
+
+    Returns (entity_name, category, fact_type, subject).
+    """
+    entity = op.get("entity_name", "user")
+    category = op.get("category", "other")
+    fact_type = op.get("fact_type") or infer_fact_type(category, op.get("content", ""))
+    subject = op.get("subject") or op.get("value") or ""
+    return (entity, category, fact_type, subject)
+
+
+def memory_identity(memory: dict) -> tuple[str, str, str, str]:
+    """Canonical identity tuple from a stored memory dict.
+
+    Returns (entity_name, category, fact_type, subject).
+    """
+    entity_obj = memory.get("entity", {})
+    if isinstance(entity_obj, dict):
+        entity = entity_obj.get("name", "user")
+    else:
+        entity = "user"
+    category = memory.get("category", "other")
+    fact_type = memory.get("fact_type", "")
+    subject = memory.get("subject") or memory.get("value") or ""
+    return (entity, category, fact_type, subject)
+
+
+def same_identity(a: tuple, b: tuple) -> bool:
+    """Check whether two identity tuples refer to the same fact."""
+    return a == b
+
+
 class SafeMemoryManager:
     """Apply extracted operations with deterministic validation rules."""
 
@@ -45,9 +120,13 @@ class SafeMemoryManager:
         extractor: Optional[MemoryExtractor] = None,
         *,
         duplicate_threshold: Optional[float] = None,
+        structured_extractor=None,
+        use_structured_extractor: bool = False,
     ):
         self.store = store
         self.extractor = extractor or MemoryExtractor()
+        self.structured_extractor = structured_extractor
+        self.use_structured_extractor = use_structured_extractor
         self.duplicate_threshold = (
             duplicate_threshold
             if duplicate_threshold is not None
@@ -68,7 +147,18 @@ class SafeMemoryManager:
 
         Returns a list of result dicts describing what happened, for logging/tests.
         """
-        operations = self.extractor.extract(user_message)
+        operations = None
+        if self.use_structured_extractor and self.structured_extractor is not None:
+            try:
+                result = self.structured_extractor.extract(user_message)
+                if hasattr(result, "operations"):
+                    operations = result.operations
+                elif isinstance(result, list):
+                    operations = result
+            except Exception:
+                operations = None
+        if operations is None:
+            operations = self.extractor.extract(user_message)
         results = []
         for operation in operations:
             result = self.apply_operation(operation, user_message)
@@ -138,6 +228,22 @@ class SafeMemoryManager:
         content = str(operation.get("content", "")).strip()
         if not content or category not in config.VALID_CATEGORIES:
             return {"status": "skipped", "reason": "invalid_fields"}
+
+        # Validation gate: reject garbage, vague, and temporal-only values
+        from .validation import is_garbage, is_vague, is_temporal_only, validate_value
+
+        value = operation.get("value", "")
+        if value and is_garbage(str(value)):
+            return {"status": "skipped", "reason": "garbage_value"}
+        if value and is_vague(str(value)):
+            return {"status": "skipped", "reason": "vague_value"}
+        if value and is_temporal_only(str(value)):
+            return {"status": "skipped", "reason": "temporal_only"}
+        # Also check content for garbage and temporal-only
+        if is_garbage(content):
+            return {"status": "skipped", "reason": "garbage_content"}
+        if is_temporal_only(content):
+            return {"status": "skipped", "reason": "temporal_only_content"}
 
         fact_type = operation.get("fact_type") or infer_fact_type(
             category, content
@@ -233,6 +339,8 @@ class SafeMemoryManager:
             value=operation.get("value"),
             subject=operation.get("subject") or operation.get("preference_subject"),
             temporal_hint=operation.get("temporal_hint"),
+            entity_name=operation.get("entity_name", "user"),
+            entity_type=operation.get("entity_type", "self"),
         )
         result = {"status": "added", "memory_id": memory["id"], "memory": memory}
         if conflict:
@@ -510,6 +618,16 @@ class SafeMemoryManager:
                 "conflict_resolved": True,
             }
 
+        # Explicit correction with change signal: supersede ALL existing active
+        # memories in this category before adding the new one. This handles
+        # cases like "Actually, I am learning Java now" superseding "I am learning Python".
+        superseded_ids = []
+        if has_explicit_change_signal(user_message):
+            for memory in list(self.active_memories):
+                if memory.get("category") != category:
+                    continue
+                superseded_ids.append(memory["id"])
+
         memory = self.store.add_memory(
             category=category,
             content=content,
@@ -517,8 +635,20 @@ class SafeMemoryManager:
             importance=importance,
             value=operation.get("value"),
             subject=subject,
+            entity_name=operation.get("entity_name", "user"),
+            entity_type=operation.get("entity_type", "self"),
         )
-        return {"status": "added", "memory_id": memory["id"], "memory": memory}
+
+        # Apply supersession after adding the new memory (need winner ID)
+        if superseded_ids:
+            for old_id in superseded_ids:
+                self.store.supersede_memory(memory["id"], old_id)
+
+        result = {"status": "added", "memory_id": memory["id"], "memory": memory}
+        if superseded_ids:
+            result["superseded_ids"] = superseded_ids
+            result["reason"] = "explicit_correction"
+        return result
 
     def _upsert_preference(
         self,
@@ -544,6 +674,8 @@ class SafeMemoryManager:
                 importance=importance,
                 value=fact_type,
                 subject=new_subject,
+                entity_name=operation.get("entity_name", "user"),
+                entity_type=operation.get("entity_type", "self"),
             )
             return {"status": "added", "memory_id": memory["id"], "memory": memory}
 
@@ -584,17 +716,24 @@ class SafeMemoryManager:
                 subject=new_subject,
                 archive_history=True,
             )
-            return {
+            is_reversal = old_polarity and old_polarity != fact_type
+            result = {
                 "status": "updated",
                 "memory_id": memory["id"],
                 "memory": updated,
-                "conflict_resolved": old_polarity != fact_type,
+                "conflict_resolved": is_reversal,
                 "reason": (
-                    "preference_reversal"
-                    if old_polarity and old_polarity != fact_type
-                    else "preference_refresh"
+                    "preference_reversal" if is_reversal else "preference_refresh"
                 ),
             }
+            if is_reversal:
+                result["contradiction"] = {
+                    "type": "polarity_reversal",
+                    "old_fact_type": old_polarity,
+                    "new_fact_type": fact_type,
+                    "subject": new_subject,
+                }
+            return result
 
         memory = self.store.add_memory(
             category="preference",
@@ -603,6 +742,8 @@ class SafeMemoryManager:
             importance=importance,
             value=fact_type,
             subject=new_subject,
+            entity_name=operation.get("entity_name", "user"),
+            entity_type=operation.get("entity_type", "self"),
         )
         return {"status": "added", "memory_id": memory["id"], "memory": memory}
 
