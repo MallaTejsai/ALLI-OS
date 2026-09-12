@@ -252,21 +252,22 @@ class StructuredExtractor:
         model: str = "qwen2.5:7b",
         max_retries: int = 2,
         fallback_extractor: Optional[Any] = None,
+        ollama_client=None,
     ):
         self.model = model
         self.max_retries = max_retries
         self._fallback = fallback_extractor
-        self._client = None
+        self._client = ollama_client
 
     def _get_client(self):
-        """Lazy-load Ollama client."""
-        if self._client is None:
-            try:
-                import ollama
-                self._client = ollama
-            except ImportError:
-                return None
-        return self._client
+        """Return the Ollama client (pre-configured or module-level fallback)."""
+        if self._client is not None:
+            return self._client
+        try:
+            import ollama
+            return ollama
+        except ImportError:
+            return None
 
     def extract(self, user_message: str) -> list[dict]:
         """Extract memory operations from a user message.
@@ -440,9 +441,11 @@ class StructuredExtractor:
 def create_structured_extractor(
     fallback_extractor: Optional[Any] = None,
     model: str = "qwen2.5:7b",
+    ollama_client=None,
 ) -> StructuredExtractor:
     """Factory function to create a StructuredExtractor with fallback."""
     return StructuredExtractor(
         model=model,
         fallback_extractor=fallback_extractor,
+        ollama_client=ollama_client,
     )

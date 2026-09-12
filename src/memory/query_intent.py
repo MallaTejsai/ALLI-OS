@@ -20,12 +20,17 @@ def normalize_memory_query(query: str) -> str:
     """
     Normalize phrasing before intent embedding.
 
-    Collapses equivalent nickname spellings so semantic matching is stable.
+    Collapses equivalent nickname spellings and corrects common typos
+    so semantic matching is stable across misspellings.
     """
     text = (query or "").strip().lower()
     text = text.replace("\u2019", "'")
     # nick-name / nick name → nickname (generic, not a one-off answer rule)
     text = re.sub(r"\bnick[\s\-]+name\b", "nickname", text)
+    # Common typos — general corrections, not sentence-specific
+    from .extractor import _QUERY_TYPO_MAP
+    for canonical, typos in _QUERY_TYPO_MAP.items():
+        text = re.sub(r"\b(" + "|".join(typos) + r")\b", canonical, text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -185,6 +190,9 @@ CATEGORY_QUERY_CUES: dict[str, tuple[str, ...]] = {
     r"\bwhat\s+(?:\w+\s+)*don'?t\s+i\s+(?:like|enjoy)\b",
     r"\bwhich\b.*\b(?:i\s+)?(?:like|dislike|enjoy|hate)\b",
     r"\bfavou?rite\b",
+    # Boolean preference queries without explicit subject/object (e.g. "Do I like spiders?")
+    r"\bdo\s+i\s+(?:like|dislike|enjoy|hate|love)\b",
+    r"\bdo\s+i\s+(?:not|never)\s+(?:like|enjoy|love)\b",
 ),
     "interest": (r"\binterests?\b", r"\bhobb(?:y|ies)\b"),
     "education": (r"\bstud(?:ying|ing)\b", r"\bstud(?:y|ies)\b", r"\beducation\b", r"\bcollege\b", r"\bbackground\b", r"\bcourse\b", r"\bdiploma\b"),

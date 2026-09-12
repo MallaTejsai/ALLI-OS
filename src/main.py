@@ -19,9 +19,10 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 import ollama
-from ollama import chat
 
-ollama_client = ollama.Client(host=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
+from memory.ollama_connection import create_ollama_client, check_ollama_health
+
+ollama_client, ollama_endpoint = create_ollama_client()
 
 from memory import (
     CHAT_MODEL,
@@ -36,7 +37,14 @@ from memory import (
 from memory import config
 from memory.answers import grounded_answer
 from memory.extractor import looks_like_question
+from memory.foundation.understanding import classify_message_type
 from memory.query_intent import QueryIntentDetector
+from memory.foundation.pipeline import WritePipeline
+from memory.foundation.adapter import PersistentStore, SQLiteAdapter, sync_sqlite_to_old_store
+from memory.foundation.sqlite_store import SQLiteStore
+from memory.foundation.query_understanding import understand_query
+from memory.foundation.hybrid_retriever import HybridRetriever
+from memory.foundation.answer_engine import AnswerEngine
 
 
 STOP_WORDS = {
@@ -125,9 +133,9 @@ def build_general_chat_messages(conversation: list, question: str) -> list:
     return messages
 
 
-def verify_chat_model(model_name: str) -> None:
+def verify_chat_model(client: ollama.Client, model_name: str) -> None:
     try:
-        listed = __import__("ollama").list()
+        listed = client.list()
     except Exception as error:
         raise RuntimeError(f"Ollama is unavailable: {error}") from error
 
@@ -201,6 +209,16 @@ def main() -> None:
     os.makedirs(config.MEMORY_DIR, exist_ok=True)
     os.makedirs(config.BACKUP_DIR, exist_ok=True)
 
+    print("=" * 40)
+    print("           ALLI v0.6")
+    print("=" * 40)
+
+    # Health check with retry for startup delays
+    health_ok, health_msg = check_ollama_health(ollama_client, ollama_endpoint)
+    if not health_ok:
+        print(f"\n{health_msg}")
+        return
+
     embedding_store = EmbeddingStore(client=ollama_client)
     embeddings_ok = True
     try:
@@ -209,12 +227,27 @@ def main() -> None:
         embeddings_ok = False
         print(f"[Warning] {error}")
 
+    # Old JSON store for backward compatibility and retrieval
     store = MemoryStore(
         path=config.LONG_TERM_MEMORY_FILE,
         embedding_store=embedding_store,
     )
     store.load(ensure_embeddings=embeddings_ok)
 
+    # New v0.6 SQLite persistent storage
+    sqlite_db_path = os.path.join(config.MEMORY_DIR, "v06_dev.sqlite")
+    sqlite_store = SQLiteStore(sqlite_db_path)
+    sqlite_adapter = SQLiteAdapter(sqlite_store)
+    sqlite_adapter.load()
+
+    # Keep old adapter for compatibility (not used for writes)
+    persistent_store = PersistentStore(store)
+    persistent_store.load()
+
+    # Sync SQLite memories into old store so retriever can find them
+    sync_sqlite_to_old_store(sqlite_adapter, store)
+
+    # Keep old manager for retrieval compatibility (not used for writes)
     manager = SafeMemoryManager(store)
     intent_detector = QueryIntentDetector(embedding_store)
     retriever = MemoryRetriever(
@@ -223,11 +256,21 @@ def main() -> None:
         intent_detector=intent_detector,
     )
 
+    # New v0.6 HybridRetriever — consumes StructuredQuery from Session 5
+    hybrid_retriever = HybridRetriever(store, embedding_store)
+
+    # New v0.6 AnswerEngine — orchestrates S5→S6→S7→Qwen pipeline
+    answer_engine = AnswerEngine(
+        hybrid_retriever=hybrid_retriever,
+        embedding_store=embedding_store,
+        ollama_client=ollama_client,
+    )
+
     conversation = load_json_list(config.CONVERSATION_FILE)
 
-    print("=" * 40)
-    print("           ALLI v0.6")
-    print("=" * 40)
+    # New v0.6 WritePipeline — uses SQLite storage, syncs old store after writes
+    write_pipeline = WritePipeline(sqlite_adapter, old_store=store)
+
     if not embeddings_ok:
         print(
             "Memory embeddings are unavailable because the embedding model "
@@ -235,7 +278,7 @@ def main() -> None:
         )
 
     try:
-        verify_chat_model(CHAT_MODEL)
+        verify_chat_model(ollama_client, CHAT_MODEL)
     except RuntimeError as error:
         print(f"\nALLI: {error}")
         return
@@ -257,30 +300,30 @@ def main() -> None:
         intent = None
 
         # ==========================================
-        # MEMORY WRITE PIPELINE (statements only)
+        # MEMORY WRITE PIPELINE (new v0.6 foundation)
         # ==========================================
-        write_results = []
-        if not looks_like_question(question):
+        write_result = None
+        msg_type = classify_message_type(question)
+        if not looks_like_question(question) and msg_type != "question":
             try:
-                write_results = manager.process_user_message(question)
-                for result in write_results:
-                    status = result.get("status")
-                    memory_id = result.get("memory_id", "")
-                    if status == "added":
+                write_result = write_pipeline.process(question)
+                for r in write_result.results:
+                    action = r.action_taken
+                    memory_id = r.memory_id
+                    if action == "created":
                         print(f"[Memory Added] {memory_id}")
-                    elif status == "updated":
-                        if result.get("conflict_resolved"):
-                            print(f"[Memory Conflict Resolved] {memory_id}")
-                        else:
-                            print(f"[Memory Updated] {memory_id}")
-                    elif status == "deleted":
-                        print(f"[Memory Deleted] {memory_id}")
-                    elif status == "unchanged":
+                    elif action == "superseded":
+                        print(f"[Memory Superseded] {memory_id}")
+                    elif action == "updated":
+                        print(f"[Memory Updated] {memory_id}")
+                    elif action == "deactivated":
+                        print(f"[Memory Deactivated] {memory_id}")
+                    elif action == "unchanged":
                         print(f"[Memory Unchanged] {memory_id}")
             except EmbeddingError as error:
                 print(f"[Warning] Memory update skipped: {error}")
             except Exception as error:
-                print(f"[Memory Manager Error] {error}")
+                print(f"[Memory Pipeline Error] {error}")
 
         # ==========================================
         # MEMORY READ vs GENERAL CHAT
@@ -296,7 +339,7 @@ def main() -> None:
             messages = build_general_chat_messages(conversation, question)
             print("\nALLI: Thinking...")
             try:
-                response = chat(model=CHAT_MODEL, messages=messages)
+                response = ollama_client.chat(model=CHAT_MODEL, messages=messages)
                 answer = response["message"]["content"]
                 answer_source = "ollama_general"
             except Exception as error:
@@ -304,49 +347,58 @@ def main() -> None:
                 save_json(config.CONVERSATION_FILE, conversation)
                 continue
         elif intent.is_memory_read:
-            if intent.is_multi:
-                grouped = retriever.retrieve_by_requested_intents(
-                    question,
-                    intent=intent,
-                )
-                relevant = []
-                for items in grouped.values():
-                    relevant.extend(items)
-                answer = grounded_answer(
-                    intent,
-                    relevant,
-                    question=question,
-                    grouped=grouped,
-                )
-            else:
-                relevant = retriever.retrieve_relevant_memories(
-                    question,
-                    intent=intent,
-                )
-                answer = grounded_answer(intent, relevant, question=question)
-            answer_source = "grounded_memories"
+            # Use new v0.6 AnswerEngine for personal memory questions
+            print("\nALLI: Thinking...")
+            try:
+                result = answer_engine.answer(question)
+                answer = result.answer
+                answer_source = f"answer_engine_{result.source}"
 
-            if memory_debug_enabled():
-                debug = retriever.last_debug or {}
-                print(
-                    f"[Memory Search] {len(debug.get('candidates', []))} candidates"
-                )
-                for item in debug.get("selected", []):
-                    print(f"[Memory Selected] {item.get('id')}")
-                print_memory_debug(retriever, intent, answer_source)
+                if memory_debug_enabled() and result.evidence_assessment:
+                    ea = result.evidence_assessment
+                    print(f"[Evidence] status={ea.status} accepted={len(ea.accepted)} rejected={len(ea.rejected)}")
+                    if result.called_qwen:
+                        print("[Evidence] Qwen called with validated evidence only")
+            except Exception as error:
+                # Fallback to old path if AnswerEngine fails
+                print(f"[AnswerEngine Error] {error}, using fallback")
+                if intent.is_multi:
+                    grouped = retriever.retrieve_by_requested_intents(
+                        question,
+                        intent=intent,
+                    )
+                    relevant = []
+                    for items in grouped.values():
+                        relevant.extend(items)
+                    answer = grounded_answer(
+                        intent,
+                        relevant,
+                        question=question,
+                        grouped=grouped,
+                    )
+                else:
+                    relevant = retriever.retrieve_relevant_memories(
+                        question,
+                        intent=intent,
+                    )
+                    answer = grounded_answer(intent, relevant, question=question)
+                answer_source = "grounded_memories_fallback"
 
-        elif write_results:
+        elif write_result and write_result.memories:
             # After storing a fact, give a short grounded acknowledgement
-            # without inventing extra personal details.
-            memory = write_results[0].get("memory") or {}
-            status = write_results[0].get("status")
-            content = memory.get("content", "")
-            if status == "unchanged":
+            memory = write_result.memories[0]
+            status = write_result.status
+            content = memory.content
+            if status == "no_op":
                 answer = "I already have that stored."
-            elif status == "updated":
-                answer = f"Got it — I updated that memory: {content}"
-            elif status == "added":
-                answer = f"Got it — I'll remember that: {content}"
+            elif status == "success":
+                action = write_result.results[0].action_taken if write_result.results else "created"
+                if action == "superseded":
+                    answer = f"Got it — I updated that memory: {content}"
+                elif action == "deactivated":
+                    answer = f"Okay, I'll forget that."
+                else:
+                    answer = f"Got it — I'll remember that: {content}"
             else:
                 answer = "Okay."
             answer_source = "memory_write_ack"
@@ -356,7 +408,7 @@ def main() -> None:
             messages = build_general_chat_messages(conversation, question)
             print("\nALLI: Thinking...")
             try:
-                response = chat(model=CHAT_MODEL, messages=messages)
+                response = ollama_client.chat(model=CHAT_MODEL, messages=messages)
                 answer = response["message"]["content"]
                 answer_source = "ollama_general"
             except Exception as error:
@@ -369,6 +421,9 @@ def main() -> None:
 
         print("\nALLI:")
         print(answer)
+
+    # Cleanup SQLite connection
+    sqlite_adapter.close()
 
 
 if __name__ == "__main__":

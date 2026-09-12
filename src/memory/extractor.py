@@ -261,14 +261,41 @@ def _classify_possession_subject(item: str) -> str:
 
 def looks_like_question(message: str) -> bool:
     text = message.strip().lower()
+    # Normalize common typos so "wat" → "what", "phne" → "phone", etc.
+    for canonical, typos in _QUERY_TYPO_MAP.items():
+        text = re.sub(r"\b(" + "|".join(typos) + r")\b", canonical, text)
     if text.endswith("?"):
         return True
     return bool(
         re.match(
-            r"^(what|who|where|when|why|how|do you|did i|can you|tell me)\b",
+            r"^(?:what|who|where|when|why|how|which"
+            r"|do|did|can|could|would|should"
+            r"|is|am|are|was|were"
+            r"|tell|give|show)\b",
             text,
         )
     )
+
+
+# General typo map shared with query_intent.normalize_memory_query.
+_QUERY_TYPO_MAP: dict[str, list[str]] = {
+    "phone": ["phne", "phon", "phnoe", "fone", "pfone"],
+    "what": ["wat", "wht", "whaat", "hwat", "wha"],
+    "which": ["wich", "whch", "whihc"],
+    "learning": ["learing", "lerning", "leanring"],
+    "studying": ["studing", "studying", "stuyding"],
+    "interested": ["intrested", "intresting", "intersted"],
+    "python": ["pyhton", "pytohn", "pyhon"],
+    "favorite": ["favrite", "favourite", "favrouite"],
+    "goals": ["goalz", "gaols"],
+    "skills": ["skils", "skillz", "sklls"],
+    "nothing": ["noting", "nothign"],
+    "something": ["somthing", "smething"],
+    "anything": ["anythign", "anyting"],
+    "everything": ["everythign", "evrything"],
+    "tomorrow": ["tommorrow", "tommorow", "tomorow"],
+    "computer": ["compuer", "compter", "computor"],
+}
 
 
 def preference_polarity(content: str) -> Optional[str]:
@@ -951,7 +978,32 @@ class MemoryExtractor:
                     operation["entity_type"] = entity_type
                     operations.append(operation)
 
-        return operations
+        # Filter out garbage extractions from malformed input
+        validated = []
+        for op in operations:
+            if self._is_valid_operation(op):
+                validated.append(op)
+        return validated
+
+    @staticmethod
+    def _is_valid_operation(op: dict) -> bool:
+        """Reject extractions that are clearly nonsensical."""
+        value = (op.get("value") or "").strip().lower()
+        content = (op.get("content") or "").strip().lower()
+        _INVALID_VALUES = {
+            "now", "today", "tomorrow", "yesterday", "here", "there",
+            "yes", "no", "ok", "okay", "maybe", "something", "nothing",
+            "anything", "everything", "stuff", "thing", "things", "it",
+            "that", "this", "what", "which", "when", "where", "how", "why",
+            "do", "did", "does", "is", "are", "was", "were", "am",
+            "i", "you", "he", "she", "we", "they", "me", "him", "her",
+            "us", "my", "your", "his", "its", "our", "their",
+        }
+        if value in _INVALID_VALUES:
+            return False
+        if content and len(content.split()) < 3:
+            return False
+        return True
 
     def _extract_delete(self, text: str) -> list[dict]:
         lower = text.lower()

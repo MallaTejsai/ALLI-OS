@@ -14,7 +14,8 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-os.environ.setdefault("OLLAMA_HOST", "http://172.25.80.1:11434")
+from memory.ollama_connection import discover_ollama_endpoint
+os.environ.setdefault("OLLAMA_HOST", discover_ollama_endpoint())
 
 from memory.store import MemoryStore
 from memory.embeddings import EmbeddingStore, EmbeddingError

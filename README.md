@@ -31,6 +31,41 @@ cd ALLI-OS/src
 python main.py
 ```
 
+### Multi-Terminal Launch
+
+ALLI runs from a single project — no separate copies. Endpoint is auto-discovered:
+
+**Windows PowerShell** (Ollama runs natively on Windows):
+```powershell
+cd E:\AI - projects\ALLI-OS\src
+python main.py
+```
+
+**WSL Ubuntu** (Ollama runs on Windows host — auto-detected):
+```bash
+cd /mnt/e/AI\ -\ projects/ALLI-OS/src
+python3 main.py
+```
+
+**VS Code terminal** — works automatically with either PowerShell or WSL backend.
+
+Override endpoint if needed:
+```bash
+export OLLAMA_HOST=http://custom-host:11434
+```
+
+### Ollama Auto-Start (Windows)
+
+For ALLI to work after a normal PC restart, Ollama must start automatically on Windows.
+Run this **once** in an **elevated PowerShell** (Run as Administrator):
+
+```powershell
+New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
+  -Name "Ollama" `
+  -Value '"C:\Users\tejsa\AppData\Local\Programs\Ollama\ollama.exe" serve' `
+  -PropertyType String -Force
+```
+
 ### Tests
 
 ```bash

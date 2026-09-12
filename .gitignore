@@ -16,3 +16,16 @@ env/
 
 # Temporary test directories
 memory_test*/
+
+# SQLite databases (development)
+*.sqlite
+*.sqlite3
+*.db
+
+# Runtime memory data (source of truth is SQLite, gitignored above)
+memory.json
+memory/conversation.json
+memory/long_term_memory.json
+memory/backups/
+memory/*.corrupt.*
+memory/*.backup.*

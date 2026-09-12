@@ -24,8 +24,15 @@ class EmbeddingStore:
         if client is not None:
             self._client = client
         else:
-            # Read OLLAMA_HOST from environment, default to 127.0.0.1:11434
-            self._client = ollama.Client(host=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
+            # Prefer OLLAMA_HOST; otherwise auto-discover (Windows/localhost/WSL
+            # gateway) so the embedding model is reachable in every terminal.
+            explicit = os.environ.get("OLLAMA_HOST", "").strip()
+            if explicit:
+                host = explicit
+            else:
+                from .ollama_connection import discover_ollama_endpoint
+                host = discover_ollama_endpoint()
+            self._client = ollama.Client(host=host)
         self._cache: dict[str, list[float]] = {}
         self._verified = False
 

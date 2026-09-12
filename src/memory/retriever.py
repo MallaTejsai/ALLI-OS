@@ -428,6 +428,9 @@ class MemoryRetriever:
                 mem_entity_name = mem_entity.get("name", "user")
             else:
                 mem_entity_name = "user"
+            # Normalize "self" to "user" for consistent comparison
+            if mem_entity_name == "self":
+                mem_entity_name = "user"
             if mem_entity_name == entity_name:
                 filtered.append(memory)
         return filtered
