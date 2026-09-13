@@ -223,6 +223,14 @@ def _extract_topic(question: str) -> Optional[str]:
             topic = topic.rstrip(".")
             topic = re.sub(r"\b(?:do|does|is|are|did)\b", "", topic).strip()
             if topic and len(topic) > 1:
+                # Reject verb-phrase fragments (e.g. "was i debugging") — they
+                # are not grammatical topics and only make the unknown response
+                # awkward. A topic must be a noun-ish phrase: it may not start
+                # with an auxiliary verb nor embed a subject pronoun.
+                if re.match(r"^(?:was|were|did|do|does|done|is|are|am|was|will|would|could|should|can)\b", topic):
+                    continue
+                if re.search(r"\b(?:i|you|he|she|we|they)\b", topic):
+                    continue
                 return topic
 
     return None

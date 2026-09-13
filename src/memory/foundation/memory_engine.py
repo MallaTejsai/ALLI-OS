@@ -25,6 +25,7 @@ Scope:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -116,6 +117,7 @@ class MemoryEngine:
             db_path = os.path.normpath(db_path)
 
         self._db_path = db_path
+        self._allow_qwen = allow_qwen
         self._sqlite_store = SQLiteStore(db_path)
         self._sqlite_adapter = SQLiteAdapter(self._sqlite_store)
         self._sqlite_adapter.load()
@@ -249,10 +251,26 @@ class MemoryEngine:
         if not question or not question.strip():
             return "Please type a question."
 
-        # Check intent for general knowledge routing
+        # Check intent for general knowledge routing.
+        # Only *clearly general* questions go to the general LLM. Unclassified
+        # personal questions ("What was I debugging?") fall through to the
+        # memory pipeline, which will answer honestly if nothing is stored —
+        # routing them to a general LLM invites hallucinated personal context.
         try:
             intent = self._intent_detector.detect(question)
-            if intent.is_general_knowledge or not intent.is_memory_read:
+            has_personal_ref = bool(re.search(
+                r"\b(?:my|mine|myself|i|me)\b",
+                question.lower(),
+            ))
+            wants_general = intent.is_general_knowledge or (
+                not intent.is_memory_read and not has_personal_ref
+            )
+            if wants_general:
+                if not self._allow_qwen:
+                    return (
+                        "I can't answer general knowledge questions while the "
+                        "language model is disabled."
+                    )
                 # Route to general knowledge via Qwen
                 from .. import CHAT_MODEL
                 try:
@@ -269,6 +287,8 @@ class MemoryEngine:
             pass
 
         try:
+            # Ensure old store has latest SQLite data before retrieval
+            self._sync_to_old_store()
             result = self._answer_engine.answer(question, diagnostics=diagnostics)
             return result.answer
         except Exception as e:

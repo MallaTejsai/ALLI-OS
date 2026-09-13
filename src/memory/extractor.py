@@ -76,6 +76,19 @@ CHANGE_SIGNAL_PHRASES = (
     "replaced",
     "replaced with",
     "i now",
+    # Centralized state-change / supersession vocabulary (generic, any fact)
+    "i changed my mind",
+    "i decided against",
+    "i decided not to",
+    "i no longer prefer",
+    "i changed my preference",
+    "i used to want",
+    "i used to like",
+    "i used to prefer",
+    "i stopped wanting",
+    "i stopped preferring",
+    "i've changed my mind",
+    "i've decided against",
 )
 
 TEMPORARY_PHRASES = (
@@ -102,6 +115,19 @@ TEMPORARY_PHRASES = (
     "study for my",
     "i want to prepare for",
     "i want to study for",
+    # General temporal signals (independent of subject)
+    "currently",
+    "at present",
+    "for now",
+    "just",
+    "right now working",
+    "currently working",
+    "at the moment working",
+    "today i am",
+    "today i'm",
+    "this morning",
+    "this afternoon",
+    "tonight",
 )
 
 DELETE_PATTERNS = (
@@ -340,7 +366,8 @@ def looks_like_person_name(value: str) -> bool:
     if re.search(
         r"\b(in|and|or|with|at|from|into|about|learning|studying|"
         r"interested|intrested|interest|working|trying|using|doing|"
-        r"going|want|wanna|hope|plan)\b",
+        r"going|want|wanna|hope|plan|building|creating|making|"
+        r"coding|debugging|writing|developing|reading)\b",
         lower,
     ):
         return False

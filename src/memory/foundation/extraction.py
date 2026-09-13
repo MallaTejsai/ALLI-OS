@@ -240,17 +240,36 @@ _SKILL_VERBS = re.compile(
     re.IGNORECASE,
 )
 
+_PROJECT_VERBS = re.compile(
+    r"\b(?:build(?:ing)?|develop(?:ing)?|creat(?:ing|e[sd]?)?|"
+    r"mak(?:ing|e[sd]?)?|working\s+on|work(?:ing)?\s+for)\b",
+    re.IGNORECASE,
+)
+
 
 def _classify_domain(message: str) -> str:
-    """Classify the domain of a message based on verb patterns."""
+    """Classify the domain of a message based on verb patterns.
+
+    NOTE: preference verbs are checked BEFORE learning verbs to stay consistent
+    with the read path (_extract_relation checks preference first). A message
+    like "I prefer learning through projects" expresses a preference ABOUT
+    learning, and the question side ("How do I prefer to learn?") extracts
+    relation='prefer' — write and read must agree on which signal wins.
+
+    Project verbs are checked BEFORE identity so that "I am building X" /
+    "I am developing X" are classified as project work rather than identity
+    (the identity pattern "i am <X>" would otherwise swallow activity phrases).
+    """
     lower = message.lower()
 
-    if _LEARNING_VERBS.search(lower):
-        return "learning"
     if _PREFERENCE_VERBS.search(lower):
         return "interests"
+    if _LEARNING_VERBS.search(lower):
+        return "learning"
     if _GOAL_VERBS.search(lower):
         return "goals"
+    if _PROJECT_VERBS.search(lower):
+        return "projects"
     if _POSSESSION_VERBS.search(lower):
         return "possessions"
     if _IDENTITY_VERBS.search(lower):
@@ -278,8 +297,13 @@ def _extract_subject_from_message(message: str, domain: str) -> str:
     cleaned = filler_pattern.sub("", lower).strip()
 
     if domain == "learning":
+        # The optional skip-word group is LAZY so the capture prefers the
+        # phrase directly after the verb. The terminator set includes
+        # purpose/destination prepositions ("for", "to", "at") so that
+        # "learning Flutter for mobile development" captures "flutter"
+        # (the thing learned), not the purpose clause.
         match = re.search(
-            r"(?:learn(?:ing|ed)?|study(?:ing|ied)?|pick(?:ing)?\s+up|picked\s+up)\s+(?:\w+\s+)?(.+?)(?:\s+(?:now|currently|today|tomorrow|later|right|this|next)\b|$)",
+            r"(?:learn(?:ing|ed)?|study(?:ing|ied)?|pick(?:ing)?\s+up|picked\s+up)\s+(?:\w+\s+)??(.+?)(?:\s+(?:for|to|at|now|currently|today|tomorrow|later|right|this|next)\b|$)",
             cleaned,
             re.IGNORECASE,
         )
@@ -365,6 +389,17 @@ def _extract_subject_from_message(message: str, domain: str) -> str:
 
         match = re.search(
             r"(?:have|has|own|use|used|bought|got)\s+(?:a\s+|an\s+|my\s+)?(.+?)(?:\s+(?:now|currently|today|tomorrow|later|right|this|next)\b|$)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if match:
+            return _normalize_subject(match.group(1))
+
+    if domain == "projects":
+        # "I am building/developing/creating/working on X"
+        match = re.search(
+            r"\b(?:build(?:ing)?|develop(?:ing)?|creat(?:ing|e[sd]?)?|"
+            r"mak(?:ing|e[sd]?)?|working\s+on|work(?:ing)?\s+for)\s+(?:a\s+|an\s+|the\s+|my\s+|some\s+)?(.+?)(?:\s+(?:right\s+now|currently|now|today|tomorrow|later|this|next)\b|$)",
             cleaned,
             re.IGNORECASE,
         )
@@ -564,6 +599,9 @@ def _infer_fact_type(domain: str, message: str) -> str:
 
     if domain == "knowledge":
         return "skill"
+
+    if domain == "projects":
+        return "project"
 
     return "general"
 

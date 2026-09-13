@@ -360,6 +360,10 @@ _RELATION_SIGNALS = {
 
 # Object extraction — common query objects
 _OBJECT_PATTERNS = [
+    # Software development contexts (checked before hardware "mobile"/"phone")
+    (r"\bmobile\s+(?:development|app|apps|application|applications|programming|tech|games?)\b", "technology"),
+    (r"\b(?:app|apps)\s+development\b", "technology"),
+    (r"\bweb\s+development\b", "technology"),
     # Devices
     (r"\b(phone|mobile|cell\s*phone|smartphone|handset)\b", "phone"),
     (r"\b(laptop|notebook)\b", "laptop"),
@@ -553,13 +557,13 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
 
     # Centralized definition-intent guard (semantic, generic)
     # Centralized definition-intent guard (semantic, generic)
-    is_definitional = bool(re.search(r"what\s+is\s+\w+", lower) or re.search(r"explain\s+\w+", lower) or re.search(r"tell\s+me\s+about\s+\w+", lower))
-    has_personal_ref = bool(re.search(r"(?:my|i\s+am|mine|about\s+me)", lower))
+    is_definitional = bool(re.search(r"\bwhat\s+is\b\s+\w+", lower) or re.search(r"\bexplain\b\s+\w+", lower) or re.search(r"\btell\s+me\s+about\b\s+\w+", lower))
+    has_personal_ref = bool(re.search(r"\b(?:my|i\s+am|mine|about\s+me)\b", lower))
     if is_definitional and not has_personal_ref:
         return "unknown"
 
         # Centralized project/preference relations (before learning)
-    if re.search(r"developing|building|creating", lower) and not is_negated:
+    if re.search(r"\bdeveloping\b|\bbuilding\b|\bcreating\b", lower) and not is_negated:
         return "project"
 
         # Check for preference words FIRST (before possess) to avoid "favorite" → possess
@@ -588,11 +592,11 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
         return "prefer"
 
     # Project / working-on — centralized (before learning when project context present)
-    if re.search(r"(?:developing|building|creating|working\s+on)", lower) and not is_negated:
+    if re.search(r"\b(?:developing|building|creating|working\s+on)\b", lower) and not is_negated:
         return "project"
 
     # Project / working-on — centralized (before general learning)
-    if re.search(r"(?:developing|building|creating|working\s+on)", lower) and not is_negated:
+    if re.search(r"\b(?:developing|building|creating|working\s+on)\b", lower) and not is_negated:
         return "project"
 
     # Learning relations (check before possess for "working on")
@@ -675,13 +679,26 @@ def _extract_object(normalized: str) -> str:
             return obj
 
     # Try to extract a noun after question words
-    match = re.search(r"\bwhat\s+(?:is|are|do|does|did|was|were|am|have|has|had)\s+(?:my|i(?:'m|\s+am|\s+was|\s+were|\s+did|\s+do|\s+have|\s+had|\s+am)?|the\s+user(?:'s)?)?\s*(\w+)", lower)
+    _SKIP_OBJECTS = {"i", "me", "my", "mine", "myself", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "using", "have", "has", "had", "do", "does", "did", "was", "were", "is", "are", "am", "being", "been", "get", "got", "getting", "go", "going", "went", "make", "made", "making", "take", "took", "taking", "give", "gave", "giving", "say", "said", "saying", "know", "knew", "knowing", "think", "thought", "thinking", "want", "wanted", "wanting", "like", "liked", "liking", "use", "used", "need", "needed", "trying", "try", "interested", "into", "working", "stop", "stopped", "stopping", "building", "developing", "creating"}
+    # Nouns that name a memory category rather than a specific object.
+    # When one of these follows the extracted word, that word is an adjective
+    # modifier (e.g. "professional goal", "main goal") and the category noun is
+    # the real object of the question.
+    _CATEGORY_NOUNS = {"goal", "goals", "preference", "preferences", "project", "projects", "learning", "language", "technology", "color", "colour", "food", "music", "movie", "reading", "hobby"}
+
+    match = re.search(r"\bwhat\s+(?:is|are|do|does|did|was|were|am|have|has|had)\s+(?:my|i(?:'m|\s+am|\s+was|\s+were|\s+did|\s+do|\s+have|\s+had|\s+am)?|the\s+user(?:'s)?)?\s*(\w+)(?:\s+(\w+))?", lower)
     if match:
         obj = match.group(1)
-        # Skip pronouns and common verbs as objects
-        _SKIP_OBJECTS = {"i", "me", "my", "mine", "myself", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "using", "have", "has", "had", "do", "does", "did", "was", "were", "is", "are", "am", "being", "been", "get", "got", "getting", "go", "going", "went", "make", "made", "making", "take", "took", "taking", "give", "gave", "giving", "say", "said", "saying", "know", "knew", "knowing", "think", "thought", "thinking", "want", "wanted", "wanting", "like", "liked", "liking", "use", "used", "need", "needed", "trying", "try", "interested", "into", "working", "stop", "stopped", "stopping"}
+        next_word = match.group(2)
         if obj not in _SKIP_OBJECTS:
+            # Adjective + category noun ("professional goal", "main goal"):
+            # the category noun is the real object.
+            if next_word and next_word in _CATEGORY_NOUNS:
+                return next_word
             return obj
+        # First word was a skip word — try the next word
+        if next_word and next_word not in _SKIP_OBJECTS and next_word not in ("what", "the", "is", "my"):
+            return next_word
 
     # Special handling for "what did I stop learning" pattern
     # Extract the object after "stop" or "stopped"
@@ -815,6 +832,8 @@ def _extract_domain(normalized: str, relation: str, object_hint: str) -> str:
         return "goals"
     if relation == "skill":
         return "skills"
+    if relation == "project":
+        return "projects"
 
     # Infer from object
     if object_hint in ("phone", "laptop", "computer", "tablet", "device", "car", "bike", "watch", "camera", "audio", "peripheral"):
@@ -984,9 +1003,7 @@ def understand_query(query: str) -> StructuredQuery:
     return StructuredQuery(
         subject=entity_name,
         relation=relation,
-        # Centralized retrieval alignment: category queries must pass object_hint
-        object=object_hint if object_hint else "unknown",
-
+        object=object_hint,
         state=state,
         time=time,
         cardinality=cardinality,

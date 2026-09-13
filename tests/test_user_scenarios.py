@@ -126,6 +126,7 @@ def test_temporary_info():
         eng2 = MemoryEngine(db_path=db_path, allow_qwen=False)
         ans = eng2.recall("What was I debugging?")
         print(f"  [TEMPORARY] {ans}")
+        eng2.close()
         # Should say unknown, not recall the temporary info
         assert "don't" in ans.lower() or "unknown" in ans.lower() or "no" in ans.lower(), f"FAIL: {ans}"
         assert "debugging" not in ans.lower(), f"FAIL - remembered temporary info: {ans}"

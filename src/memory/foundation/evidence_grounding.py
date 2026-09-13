@@ -126,12 +126,13 @@ class EvidenceGrounder:
     # Relation compatibility groups
     _RELATION_COMPAT: dict[str, set[str]] = {
         "possess": {"possession", "device", "phone", "laptop", "car", "ownership", "owned_item"},
-        "prefer": {"preference", "like", "dislike", "interest", "favorite"},
+        "prefer": {"preference", "like", "dislike", "interest", "favorite", "learning"},
         "learn": {"learning", "education", "skill", "course", "study"},
         "identity": {"identity", "name", "nickname"},
-        "goal": {"goal", "ambition", "dream"},
+        "goal": {"goal", "ambition", "dream", "career_goal", "project_goal"},
         "skill": {"skill", "ability", "proficiency"},
         "disprefer": {"dislike", "preference_dislike"},
+        "project": {"project", "project_goal"},
         "not_possess": set(),
         "not_learn": set(),
     }
@@ -139,11 +140,29 @@ class EvidenceGrounder:
     # Domain compatibility groups
     _DOMAIN_COMPAT: dict[str, set[str]] = {
         "possessions": {"possession", "device"},
-        "interests": {"preference", "interest", "like"},
+        "interests": {"preference", "interest", "like", "learning"},
         "learning": {"learning", "education", "skill"},
         "identity": {"identity"},
         "goals": {"goal", "ambition", "dream"},
         "skills": {"skill", "ability"},
+        "projects": {"project", "project_goal"},
+    }
+
+    # Category-noun objects mapped to their canonical relation. When a query's
+    # object is one of these nouns AND matches the query relation, the query is
+    # category-level ("What is my goal?") and object validation is satisfied by
+    # any relation-compatible memory.
+    _CATEGORY_OBJECT_TO_RELATION: dict[str, str] = {
+        "goal": "goal",
+        "goals": "goal",
+        "project": "project",
+        "projects": "project",
+        "learning": "learn",
+        "name": "identity",
+        "preference": "prefer",
+        "preferences": "prefer",
+        "skill": "skill",
+        "skills": "skill",
     }
 
     def ground(
@@ -294,6 +313,7 @@ class EvidenceGrounder:
             "kotlin", "php", "sql", "html", "css", "react", "angular", "vue",
             "node", "django", "flask", "spring", "rails", "laravel", "docker",
             "kubernetes", "linux", "windows", "macos", "android", "ios",
+            "flutter", "dart", "tailwind", "svelte", "next", "nuxt", "vite",
             "samsung", "iphone", "pixel", "oppo", "oneplus", "xiaomi", "huawei", "motorola", "nokia",
             "samsung s24", "samsung s23", "samsung s22", "iphone 15", "iphone 14", "iphone 13",
             "galaxy", "galaxy s24", "galaxy s23",
@@ -307,17 +327,33 @@ class EvidenceGrounder:
     }
 
     def _validate_object(self, item: EvidenceItem, query: StructuredQuery) -> bool:
+        obj_lower = str(query.object or "").lower()
+        content_lower = str(item.content or "").lower()
+
         """Validate that memory content is compatible with query object."""
         if not query.object or query.object == "unknown":
             return True  # No object constraint
 
-        obj_lower = query.object.lower()
+        # Category-level query: the extracted object names the memory category
+        # itself ("What is my goal?", "What am I learning?") rather than a
+        # specific thing. When the object is the category noun for the query
+        # relation, any memory that already passed relation validation
+        # satisfies this constraint — the object adds no extra information.
+        cat_rel = self._CATEGORY_OBJECT_TO_RELATION.get(obj_lower)
+        if cat_rel and cat_rel == query.relation:
+            return True
+
+        # Direct match in value
         content_lower = item.content.lower()
         subject_lower = str(item.candidate.memory.get("subject", "")).lower()
         value_lower = str(item.candidate.memory.get("value", "")).lower()
 
         # Direct match in subject
         if obj_lower in subject_lower:
+            return True
+
+        # Centralized category-instance compatibility (generic ontology rule)
+        if self._category_compatible(query.object, subject_lower, value_lower, content_lower):
             return True
 
         # Direct match in value
@@ -403,6 +439,24 @@ class EvidenceGrounder:
             return False
 
         return True
+
+    
+
+    # Generic category-instance compatibility via centralized ontology.
+    # If query asks for a category concept (from _CATEGORY_INSTANCES)
+    # and memory's subject/value/content contains an instance of that
+    # category, validation passes. Works for any category.
+    def _category_compatible(self, query_obj: str, mem_subj: str, mem_val: str, mem_content: str) -> bool:
+        if not query_obj or query_obj == "unknown":
+            return False
+        instances = self._CATEGORY_INSTANCES.get(query_obj.lower(), set())
+        if not instances:
+            return False
+        combined = f"{mem_subj or ''} {mem_val or ''} {mem_content or ''}".lower()
+        for inst in instances:
+            if inst in combined:
+                return True
+        return False
 
     def _detect_negation(self, item: EvidenceItem) -> bool:
         """Detect if the memory contains negation."""

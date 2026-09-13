@@ -83,13 +83,29 @@ def discover_ollama_endpoint() -> str:
 
     Returns the first reachable URL, or a best-guess default.
     """
-    # 1. Explicit override always wins
+    localhost = "http://127.0.0.1:11434"
+
+    # 1. Explicit override — validated, not blindly trusted.
+    #    OLLAMA_HOST is often set to a *server listen* address (e.g. "0.0.0.0:11434"),
+    #    which is not a valid client connect target. Normalize it and probe: if the
+    #    override is reachable, use it; otherwise fall through to discovery.
     explicit = os.environ.get("OLLAMA_HOST", "").strip()
     if explicit:
-        return explicit
+        candidate = explicit
+        # Ensure a scheme so ollama.Client parses it correctly
+        if "://" not in candidate:
+            candidate = "http://" + candidate
+        # A server bind address of 0.0.0.0 means "all interfaces" — as a client
+        # we connect via loopback instead.
+        if "://0.0.0.0" in candidate:
+            candidate = candidate.replace("://0.0.0.0", "://" + "127.0.0.1", 1)
+        if _try_endpoint(candidate):
+            return candidate
+        # Unreachable override — try loopback before giving up on it
+        if candidate != localhost and _try_endpoint(localhost):
+            return localhost
 
     # 2. Try localhost (works on native Windows, or if Ollama runs inside WSL)
-    localhost = "http://127.0.0.1:11434"
     if _try_endpoint(localhost):
         return localhost
 

@@ -341,17 +341,17 @@ class HybridRetriever:
 
             # Relation/fact_type match
             mem_fact_type = str(memory.get("fact_type", "")).lower()
+            mem_category = str(memory.get("category", "")).lower()
             relation_match = self._match_relation(query.relation, mem_fact_type)
             score += relation_match * 0.30
 
             # Object/subject match
             mem_subject = str(memory.get("subject", "")).lower()
             mem_content = str(memory.get("content", "")).lower()
-            object_match = self._match_object(query.object, mem_subject, mem_content)
+            object_match = self._match_object(query.object, mem_subject, mem_content, mem_fact_type, mem_category)
             score += object_match * 0.20
 
             # Domain match
-            mem_category = str(memory.get("category", "")).lower()
             if query.domain and query.domain != "unknown":
                 if mem_category == query.domain or mem_category.startswith(query.domain):
                     score += 0.10
@@ -373,12 +373,13 @@ class HybridRetriever:
         # Semantic relation groups
         _RELATION_GROUPS = {
             "possess": {"possession", "possession Ownership", "device", "phone", "laptop"},
-            "prefer": {"preference", "like", "dislike", "preference Like", "preference Dislike"},
+            "prefer": {"preference", "like", "dislike", "preference Like", "preference Dislike", "learning"},
             "learn": {"learning", "education", "skill", "course", "study"},
             "identity": {"identity", "name", "nickname"},
-            "goal": {"goal", "ambition", "dream"},
+            "goal": {"goal", "ambition", "dream", "career_goal", "project_goal"},
             "skill": {"skill", "ability", "proficiency"},
             "disprefer": {"dislike", "preference Dislike"},
+            "project": {"project", "project_goal"},
             "not_possess": set(),
             "not_learn": set(),
         }
@@ -395,27 +396,31 @@ class HybridRetriever:
         return 0.0
 
     def _match_object(
-        self, query_object: str, mem_subject: str, mem_content: str
+        self, query_object: str, mem_subject: str, mem_content: str, mem_fact_type: str = "", mem_category: str = ""
     ) -> float:
-        """Match query object to memory subject/content."""
-        if query_object == "unknown" or not query_object:
+        """Match query object — category-aware for general queries, specific for exact."""
+        if query_object and query_object != "unknown":
+            obj_lower = query_object.lower()
+            if obj_lower in mem_subject.lower():
+                return 1.0
+            obj_tokens = set(tokenize(obj_lower))
+            content_tokens = set(tokenize(mem_content))
+            if obj_tokens and content_tokens:
+                overlap = obj_tokens & content_tokens
+                if overlap:
+                    return min(1.0, len(overlap) / len(obj_tokens))
+            # Semantic overlap with category words in content
+            for cat_word in ("project","goal","preference","learning","technology","skill","identity","relationship"):
+                if cat_word in obj_lower and cat_word in mem_content.lower():
+                    return 0.85
             return 0.0
-
-        obj_lower = query_object.lower()
-
-        # Exact match on subject
-        if obj_lower in mem_subject.lower():
-            return 1.0
-
-        # Token overlap with content
-        obj_tokens = set(tokenize(obj_lower))
-        content_tokens = set(tokenize(mem_content))
-        if obj_tokens and content_tokens:
-            overlap = obj_tokens & content_tokens
-            if overlap:
-                return min(1.0, len(overlap) / len(obj_tokens))
-
-        return 0.0
+        else:
+            # Category-level query: use relation/domain/category to match
+            if mem_fact_type in ("project","goal","preference","learning","skill"):
+                return 0.75
+            if mem_category in ("project","goals","interests","learning","skills"):
+                return 0.75
+            return 0.5  # neutral for category query
 
     # -------------------------------------------------------------------
     # Channel 2: Keyword Retrieval

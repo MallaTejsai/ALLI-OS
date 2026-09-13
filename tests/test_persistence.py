@@ -57,7 +57,9 @@ def db_path():
 
 @pytest.fixture
 def store(db_path):
-    return SQLiteStore(db_path)
+    s = SQLiteStore(db_path)
+    yield s
+    s.close()
 
 
 @pytest.fixture
