@@ -591,6 +591,10 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
     if re.search(r"(?:developing|building|creating|working\s+on)", lower) and not is_negated:
         return "project"
 
+    # Project / working-on — centralized (before general learning)
+    if re.search(r"(?:developing|building|creating|working\s+on)", lower) and not is_negated:
+        return "project"
+
     # Learning relations (check before possess for "working on")
     if re.search(r"\b(?:learn|learning|learns|study|studying|studies|know|knows|taking|taken|take|working\s+on)\b", lower):
         if is_negated:
