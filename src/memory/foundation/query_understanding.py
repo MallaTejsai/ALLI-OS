@@ -551,7 +551,14 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
         lower,
     ))
 
-    # Check for preference words FIRST (before possess) to avoid "favorite" → possess
+    # Centralized definition-intent guard (semantic, generic)
+    # Centralized definition-intent guard (semantic, generic)
+    is_definitional = bool(re.search(r"what\s+is\s+\w+", lower) or re.search(r"explain\s+\w+", lower) or re.search(r"tell\s+me\s+about\s+\w+", lower))
+    has_personal_ref = bool(re.search(r"(?:my|i\s+am|mine|about\s+me)", lower))
+    if is_definitional and not has_personal_ref:
+        return "unknown"
+
+        # Check for preference words FIRST (before possess) to avoid "favorite" → possess
     if re.search(r"\b(?:like|likes|enjoy|enjoys|love|loves|fancy|fancies|prefer|prefers|favorite|favourite|fav)\b", lower):
         if re.search(r"\b(?:dislike|dislikes|hate|hates|don'?t\s+like|do\s+not\s+like|don'?t\s+enjoy)\b", lower):
             return "disprefer"
