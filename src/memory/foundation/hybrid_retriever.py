@@ -292,13 +292,27 @@ class HybridRetriever:
     def _get_candidate_pool(self, query: StructuredQuery) -> list[dict]:
         """Get the base candidate pool from the store.
 
-        For historical queries, also include inactive/superseded memories.
+        NEGATED memories (explicitly-contradicted current state, e.g. "I
+        don't want to learn Rust anymore.") are always included: they are the
+        current state for their subject. For historical queries,
+        inactive/superseded memories are included too.
         """
         active = self.store.active_memories()
 
+        all_memories = getattr(self.store, "memories", [])
+
+        # NEGATED memories are current state — include them for every query.
+        negated = [
+            m
+            for m in all_memories
+            if isinstance(m, dict)
+            and str(m.get("status", "active")).lower() == "negated"
+        ]
+        if negated:
+            active = active + negated
+
         # For historical queries, we need superseded/inactive memories too
         if query.state == "historical":
-            all_memories = getattr(self.store, "memories", [])
             historical = []
             for m in all_memories:
                 if not isinstance(m, dict):

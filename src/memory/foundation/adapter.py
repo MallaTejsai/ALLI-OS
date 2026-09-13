@@ -35,6 +35,7 @@ _OLD_STATUS_MAP = {
     "inactive": LifecycleState.INACTIVE.value,
     "expired": LifecycleState.EXPIRED.value,
     "superseded": LifecycleState.INACTIVE.value,
+    "negated": LifecycleState.NEGATED.value,
 }
 
 # New lifecycle state → old status
@@ -43,6 +44,10 @@ _NEW_STATE_MAP[LifecycleState.PROPOSED.value] = "active"
 # Override: use "inactive" for inactive state (old store only recognizes
 # active/inactive/expired, not "superseded")
 _NEW_STATE_MAP[LifecycleState.INACTIVE.value] = "inactive"
+# NEGATED is preserved as its own status: it is current state for reads
+# (evidence grounding + retrieval handle "negated"), but not "active" so
+# behavioral checks and active_memories() do not count it as a stored fact.
+_NEW_STATE_MAP[LifecycleState.NEGATED.value] = "negated"
 
 
 def _old_dict_to_memory(d: dict) -> Memory:

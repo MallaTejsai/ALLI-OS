@@ -416,12 +416,15 @@ class EvidenceGrounder:
             return True  # No temporal constraint
 
         if query.state == "current":
-            # Current queries prefer active, non-superseded memories
-            return item.status == "active"
+            # Current queries prefer active, non-superseded memories.
+            # NEGATED memories represent the explicitly-contradicted current
+            # state ("I don't want to learn Rust anymore.") and are valid
+            # current-state evidence — with their negation respected.
+            return item.status in ("active", "negated")
 
         if query.state == "historical":
             # Historical queries accept inactive/superseded memories
-            return item.status in ("inactive", "superseded", "active")
+            return item.status in ("inactive", "superseded", "active", "negated")
 
         if query.state == "future":
             return True  # No special handling yet
@@ -519,6 +522,8 @@ class EvidenceGrounder:
             score *= 0.5
         if item.is_uncertain:
             score *= 0.7
+        # NEGATED is a current-state memory — the is_negated penalty already
+        # applies; no additional inactive-style penalty.
         if item.status in ("inactive", "superseded"):
             score *= 0.6
 

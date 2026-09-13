@@ -66,12 +66,19 @@ class LifecycleState(str, Enum):
 
     State machine:
         proposed → active → inactive → expired
+
+    NEGATED is the current-state outcome of an explicit negation
+    ("I don't want to learn Rust anymore."): the positive fact is inactive,
+    and a NEGATED memory represents the negative current state. It is not
+    ACTIVE (so it does not count as a stored positive fact) but it IS the
+    current state for read-side temporal validation.
     """
 
     PROPOSED = "proposed"
     ACTIVE = "active"
     INACTIVE = "inactive"
     EXPIRED = "expired"
+    NEGATED = "negated"
 
 
 class EventType(str, Enum):
@@ -324,6 +331,11 @@ class Lifecycle:
         self.state = LifecycleState.INACTIVE.value
         self.superseded_by = winner_id
         self.superseded_at = _utc_now_iso()
+
+    def negate(self) -> None:
+        """Transition to negated state (explicitly-contradicted current state)."""
+        self.state = LifecycleState.NEGATED.value
+        self.deactivated_at = _utc_now_iso()
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""

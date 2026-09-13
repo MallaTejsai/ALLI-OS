@@ -37,7 +37,7 @@ from memory import (
 from memory import config
 from memory.answers import grounded_answer
 from memory.extractor import looks_like_question
-from memory.foundation.understanding import classify_message_type
+from memory.foundation.understanding import classify_message_type, MessageType
 from memory.query_intent import QueryIntentDetector
 from memory.foundation.pipeline import WritePipeline
 from memory.foundation.adapter import PersistentStore, SQLiteAdapter, sync_sqlite_to_old_store
@@ -304,7 +304,7 @@ def main() -> None:
         # ==========================================
         write_result = None
         msg_type = classify_message_type(question)
-        if not looks_like_question(question) and msg_type != "question":
+        if not looks_like_question(question) and msg_type != MessageType.QUESTION:
             try:
                 write_result = write_pipeline.process(question)
                 for r in write_result.results:
@@ -318,6 +318,8 @@ def main() -> None:
                         print(f"[Memory Updated] {memory_id}")
                     elif action == "deactivated":
                         print(f"[Memory Deactivated] {memory_id}")
+                    elif action == "invalidated":
+                        print(f"[Memory Invalidated] {memory_id}")
                     elif action == "unchanged":
                         print(f"[Memory Unchanged] {memory_id}")
             except EmbeddingError as error:
@@ -330,8 +332,35 @@ def main() -> None:
         # ==========================================
         intent = retriever.detect_intent(question)
 
+        # A message that (a) produced memory writes and (b) is not a question
+        # is a statement the user just taught us. Acknowledge the write — do
+        # NOT route it through the read pipeline (the intent detector can
+        # misclassify negation statements like "I don't want to learn Rust
+        # anymore." as memory reads, which would answer with a confusing
+        # "I don't have that information stored").
+        is_question_like = (
+            msg_type == MessageType.QUESTION or looks_like_question(question)
+        )
+        if write_result and write_result.memories and not is_question_like:
+            memory = write_result.memories[0]
+            status = write_result.status
+            content = memory.content
+            if status == "no_op":
+                answer = "I already have that stored."
+            elif status == "success":
+                action = write_result.results[0].action_taken if write_result.results else "created"
+                if action == "superseded":
+                    answer = f"Got it — I updated that memory: {content}"
+                elif action in ("deactivated", "invalidated"):
+                    answer = "Okay, I'll forget that."
+                else:
+                    answer = f"Got it — I'll remember that: {content}"
+            else:
+                answer = "Okay."
+            answer_source = "memory_write_ack"
+
         # Vague/incomplete statements need clarification, not an LLM response.
-        if intent.needs_clarification:
+        elif intent.needs_clarification:
             answer = intent.clarification_message
             answer_source = "clarification"
         # General knowledge / advice / vague statements never touch memory.
@@ -383,25 +412,6 @@ def main() -> None:
                     )
                     answer = grounded_answer(intent, relevant, question=question)
                 answer_source = "grounded_memories_fallback"
-
-        elif write_result and write_result.memories:
-            # After storing a fact, give a short grounded acknowledgement
-            memory = write_result.memories[0]
-            status = write_result.status
-            content = memory.content
-            if status == "no_op":
-                answer = "I already have that stored."
-            elif status == "success":
-                action = write_result.results[0].action_taken if write_result.results else "created"
-                if action == "superseded":
-                    answer = f"Got it — I updated that memory: {content}"
-                elif action == "deactivated":
-                    answer = f"Okay, I'll forget that."
-                else:
-                    answer = f"Got it — I'll remember that: {content}"
-            else:
-                answer = "Okay."
-            answer_source = "memory_write_ack"
 
         else:
             # Normal knowledge / conversation — do not force memory retrieval.

@@ -307,6 +307,21 @@ def _is_compatible_addition(
 # Finding existing memories
 # ---------------------------------------------------------------------------
 
+# Generic verbs/prepositions carry no entity identity. Matching a negation or
+# correction target on these words lets "I don't want to learn Rust anymore."
+# (subject "to learn rust") deactivate the first unrelated learning memory,
+# because "learn" alone satisfies a 50% content-word overlap. Only distinctive
+# words may identify a deletion/invalidation target.
+_GENERIC_SUBJECT_WORDS = frozenset({
+    "learn", "learning", "study", "studying", "like", "liking", "love",
+    "loving", "prefer", "preferring", "want", "wanting", "wish",
+    "use", "using", "have", "having", "get", "getting", "make", "making",
+    "take", "taking", "build", "building", "develop", "developing",
+    "the", "and", "for", "with", "about", "into", "from", "that", "this",
+    "any", "more", "anymore", "now", "not", "dont",
+})
+
+
 def _find_existing_active(
     store: MemoryStore,
     entity_name: str,
@@ -323,6 +338,7 @@ def _find_existing_active(
     3. Content-based match (only when allow_content_match=True) — negated entity
        words appear in original content. Handles cross-fact-type corrections like
        "X is not my Y" where the correction is classified differently from original.
+       Generic verbs are excluded — they do not identify the target fact.
     """
     active = store.get_by_entity(entity_name)
 
@@ -349,9 +365,13 @@ def _find_existing_active(
 
     # Pass 3: content-based match (cross-fact-type corrections only)
     # Only used when explicitly allowed (correction/negation paths).
-    # Check if subject words appear in the original content.
+    # Check if DISTINCTIVE subject words appear in the original content.
     if allow_content_match:
-        subj_words_list = [w for w in _normalize_text(subject).split() if len(w) > 2]
+        subj_words_list = [
+            w
+            for w in _normalize_text(subject).split()
+            if len(w) > 2 and w not in _GENERIC_SUBJECT_WORDS
+        ]
         if subj_words_list:
             for mem in active:
                 if not mem.lifecycle.is_active:
@@ -746,6 +766,17 @@ def apply_operation(
         if existing:
             existing.lifecycle.deactivate()
             store.deactivate(existing.id)
+            # Negation-based invalidation ("I don't want to learn Rust anymore.")
+            # also stores the negative current-state fact so existence queries
+            # ("Do I want to learn Rust?") can answer "No" from evidence
+            # instead of falling back to unknown. The old positive fact stays
+            # inactive for historical queries.
+            if "negation" in reason and operation.polarity == "negative":
+                negative_memory = _create_memory_from_operation(
+                    operation, entity_ref, reason
+                )
+                negative_memory.lifecycle.negate()
+                store.add(negative_memory)
             event = MemoryEvent(
                 id=generate_event_id(),
                 event_type=EventType.DEACTIVATED.value,
@@ -859,6 +890,19 @@ def apply_operation(
     if not operation.is_temporary:
         new_memory.lifecycle.activate()
     store.add(new_memory)
+
+    # A positive statement reverses an earlier negation of the same fact:
+    # retire the NEGATED memory so both are not treated as current state.
+    if new_memory.lifecycle.is_active:
+        for mem in store.get_by_entity(entity_name):
+            if (
+                mem.lifecycle.state == LifecycleState.NEGATED.value
+                and mem.id != new_memory.id
+                and mem.fact.fact_type == operation.fact_type
+                and _subjects_match(mem.fact.subject, operation.subject)
+            ):
+                mem.lifecycle.deactivate()
+                store.deactivate(mem.id)
 
     event = MemoryEvent(
         id=generate_event_id(),
