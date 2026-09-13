@@ -587,7 +587,11 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
             return "disprefer"
         return "prefer"
 
-    # Learning relations (original position — project/preference handled separately) (check before possess for "working on")
+    # Project / working-on — centralized (before learning when project context present)
+    if re.search(r"(?:developing|building|creating|working\s+on)", lower) and not is_negated:
+        return "project"
+
+    # Learning relations (check before possess for "working on")
     if re.search(r"\b(?:learn|learning|learns|study|studying|studies|know|knows|taking|taken|take|working\s+on)\b", lower):
         if is_negated:
             return "not_learn"
