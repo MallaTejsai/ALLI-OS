@@ -558,6 +558,10 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
     if is_definitional and not has_personal_ref:
         return "unknown"
 
+        # Centralized project/preference relations (before learning)
+    if re.search(r"developing|building|creating", lower) and not is_negated:
+        return "project"
+
         # Check for preference words FIRST (before possess) to avoid "favorite" → possess
     if re.search(r"\b(?:like|likes|enjoy|enjoys|love|loves|fancy|fancies|prefer|prefers|favorite|favourite|fav)\b", lower):
         if re.search(r"\b(?:dislike|dislikes|hate|hates|don'?t\s+like|do\s+not\s+like|don'?t\s+enjoy)\b", lower):
@@ -583,7 +587,7 @@ def _extract_relation(normalized: str, object_hint: str = "unknown") -> str:
             return "disprefer"
         return "prefer"
 
-    # Learning relations (check before possess for "working on")
+    # Learning relations (original position — project/preference handled separately) (check before possess for "working on")
     if re.search(r"\b(?:learn|learning|learns|study|studying|studies|know|knows|taking|taken|take|working\s+on)\b", lower):
         if is_negated:
             return "not_learn"
