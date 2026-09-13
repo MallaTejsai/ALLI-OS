@@ -984,7 +984,9 @@ def understand_query(query: str) -> StructuredQuery:
     return StructuredQuery(
         subject=entity_name,
         relation=relation,
-        object=object_hint,
+        # Centralized retrieval alignment: category queries must pass object_hint
+        object=object_hint if object_hint else "unknown",
+
         state=state,
         time=time,
         cardinality=cardinality,
