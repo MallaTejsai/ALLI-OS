@@ -1,0 +1,36 @@
+"""Results subpackage — structured result schema for STEP 4."""
+from benchmark.v0_6_architecture.results.schema import (
+    BenchmarkResult,
+    ExecutionStatus,
+    OperationStatus,
+    AnswerClass,
+    SeverityLevel,
+    FailureCategory,
+    ScenarioIdentity,
+    DatasetIdentity,
+    RetrievalResultItem,
+    EvidenceReference,
+    AnswerResult,
+    ExpectedResult,
+    TimingObservation,
+    ResourceObservation,
+    FailureRecord,
+)
+
+__all__ = [
+    "BenchmarkResult",
+    "ExecutionStatus",
+    "OperationStatus",
+    "AnswerClass",
+    "SeverityLevel",
+    "FailureCategory",
+    "ScenarioIdentity",
+    "DatasetIdentity",
+    "RetrievalResultItem",
+    "EvidenceReference",
+    "AnswerResult",
+    "ExpectedResult",
+    "TimingObservation",
+    "ResourceObservation",
+    "FailureRecord",
+]

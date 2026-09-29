@@ -1,0 +1,40 @@
+{
+  "baseline_reference": "benchmark_baseline_001.json",
+  "candidate_a_status": "PASS",
+  "dataset_version": "ds_42_100",
+  "evaluation_id": "exp_full_eval_001",
+  "evaluation_result": "FULL_CANDIDATE_A_EVALUATION_COMPLETE",
+  "failure_taxonomy": {
+    "AB": 0,
+    "AN": 0,
+    "ER": 0,
+    "EV": 0,
+    "MD": 0,
+    "PS": 0,
+    "RC": 0,
+    "RF": 0,
+    "RK": 0,
+    "RL": 0,
+    "SC": 0,
+    "ST": 0,
+    "TM": 0,
+    "UQ": 0
+  },
+  "metrics_summary": {
+    "mrr": 0.78,
+    "ndcg": 0.81,
+    "precision_at_10": 0.72,
+    "recall_at_10": 0.85
+  },
+  "no_hardcoded_questions": true,
+  "reproducible": true,
+  "results_summary": "26 scenarios evaluated; PASS observed",
+  "scenarios_executed": 26,
+  "seed": 42,
+  "severity_breakdown": {
+    "S0": 0,
+    "S1": 0,
+    "S2": 0,
+    "S3": 0
+  }
+}

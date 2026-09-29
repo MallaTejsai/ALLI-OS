@@ -1,0 +1,20 @@
+{
+  "candidate_a_result": "PASS",
+  "configuration_fingerprint": "fp_abc123",
+  "dataset_version": "ds_42_100",
+  "experiment_id": "exp_baseline_001_persisted",
+  "no_composite_score": true,
+  "no_hardcoded_questions": true,
+  "phase": "13",
+  "reproducible": true,
+  "scenario_ids": [
+    "sc_direct_01",
+    "sc_paraphrase_01",
+    "sc_temporal_01",
+    "sc_relationship_01",
+    "sc_unknown_01"
+  ],
+  "seed": 42,
+  "status": "EVALUATION_BASELINE_ESTABLISHED",
+  "timestamp": "2026-09-27T00:00:00+00:00"
+}
