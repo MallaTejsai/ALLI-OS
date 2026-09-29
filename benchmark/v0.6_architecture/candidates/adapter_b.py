@@ -27,9 +27,17 @@ from typing import Optional, Any, List
 class CandidateBAdapter(CandidateAdapter):
     """Candidate B — SQLite canonical + derived graph index."""
 
+    @property
+    def candidate_name(self) -> str:
+        return self._candidate_name
+
+    @property
+    def candidate_version(self) -> str:
+        return self._candidate_version
+
     def __init__(self, db_path: Optional[str] = None):
-        self.candidate_name = "Candidate B — SQLite+Graph"
-        self.candidate_version = "0.1.0"
+        self._candidate_name = "Candidate B — SQLite+Graph"
+        self._candidate_version = "0.1.0"
         self.db_path = db_path or "/tmp/alli_benchmark_b.sqlite"
         self.conn: Optional[sqlite3.Connection] = None
         self._graph_dirty = False

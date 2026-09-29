@@ -29,9 +29,17 @@ import numpy as np
 class CandidateAAdapter(CandidateAdapter):
     """Candidate A — SQLite-centric canonical store."""
 
+    @property
+    def candidate_name(self) -> str:
+        return self._candidate_name
+
+    @property
+    def candidate_version(self) -> str:
+        return self._candidate_version
+
     def __init__(self, db_path: Optional[str] = None):
-        self.candidate_name = "Candidate A — SQLite-centric"
-        self.candidate_version = "0.1.0"
+        self._candidate_name = "Candidate A — SQLite-centric"
+        self._candidate_version = "0.1.0"
         self.db_path = db_path or "/tmp/alli_benchmark_a.sqlite"
         self.conn: Optional[sqlite3.Connection] = None
         self._init_db()
@@ -113,7 +121,7 @@ class CandidateAAdapter(CandidateAdapter):
     def _create_fts(self) -> None:
         # Derived FTS5 lexical index (derived from canonical memory_claims)
         self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(memory_id, content, tokenize='porter')")
-        # Derived vector index � reconstructed from canonical memory_claims
+        # Derived vector index � reconstructed from canonical memory_claims
         self.conn.execute("CREATE TABLE IF NOT EXISTS memory_vectors (memory_id TEXT PRIMARY KEY, embedding BLOB, dimensions INTEGER)")
         self.vector_dim = 384  # local benchmark-compatible dimension
         # Populate from existing claims
