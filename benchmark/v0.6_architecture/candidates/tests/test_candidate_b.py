@@ -20,7 +20,11 @@ def b_adapter():
     os.close(fd)
     adapter = CandidateBAdapter(db_path=path)
     adapter.initialize(InitializeRequest())
-    adapter.create_episode(CreateEpisodeRequest())  # ensure episode exists for foreign key
+    ep_result = adapter.create_episode(CreateEpisodeRequest())
+    adapter.episode_id = ep_result.data.episode_id  # expose real DB episode to tests
+    # Verify episode exists in DB before yielding
+    db_ep = adapter.conn.execute('SELECT episode_id FROM episodes LIMIT 1').fetchone()
+    assert db_ep is not None and db_ep[0] == str(adapter.episode_id), 'Fixture DB episode missing'
     # Ensure clean DB state for each test
     adapter.conn.execute('PRAGMA foreign_keys = ON')
     adapter.conn.commit()
@@ -39,7 +43,7 @@ def test_contract_compliance(b_adapter):
     result = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Test"))
     assert result.is_success
     result = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep_test"), content="test content", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="test content", memory_kind="FACT",
     ))
     assert result.is_success
     result = b_adapter.query(QueryRequest(query_text="test"))
@@ -127,7 +131,7 @@ def test_one_hop_traversal(b_adapter):
     """One-hop graph traversal via MENTIONS edge."""
     eid = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Alice")).data.entity_id
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="Alice mentioned", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="Alice mentioned", memory_kind="FACT",
         entity_ids=[eid],
     )).data.memory_id
     # Retrieve via entity — should find the memory via graph traversal
@@ -147,7 +151,7 @@ def test_multi_hop_traversal(b_adapter):
         source_entity_id=e1, target_entity_id=e2, relationship_type="KNOWS",
     ))
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="Bob and Carol", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="Bob and Carol", memory_kind="FACT",
         entity_ids=[e2, e3],
     )).data.memory_id
     # Two-hop: e1 →(KNOWS)→ e2 →(MENTIONS via memory mid)→ e3
@@ -161,7 +165,7 @@ def test_multi_hop_traversal(b_adapter):
 def test_update(b_adapter):
     """Update memory content persists."""
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="original", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="original", memory_kind="FACT",
     )).data.memory_id
     result = b_adapter.update_memory(UpdateMemoryRequest(memory_id=mid, content="updated"))
     assert result.is_success
@@ -172,9 +176,9 @@ def test_update(b_adapter):
 def test_supersession(b_adapter):
     """Supersede creates new memory, marks old as superseded."""
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="old", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="old", memory_kind="FACT",
     )).data.memory_id
-    new_mem = CreateMemoryRequest(episode_id=EpisodeId("ep1"), content="new", memory_kind="FACT")
+    new_mem = CreateMemoryRequest(episode_id=b_adapter.episode_id, content="new", memory_kind="FACT")
     result = b_adapter.supersede_memory(SupersedeMemoryRequest(old_memory_id=mid, new_memory=new_mem))
     assert result.is_success
     # Old memory should be superseded
@@ -189,10 +193,10 @@ def test_contradiction(b_adapter):
     """Contradiction: two memories with same entity, different content."""
     eid = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Alice")).data.entity_id
     m1 = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="Alice is tall", memory_kind="FACT", entity_ids=[eid],
+        episode_id=b_adapter.episode_id, content="Alice is tall", memory_kind="FACT", entity_ids=[eid],
     )).data.memory_id
     m2 = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="Alice is short", memory_kind="FACT", entity_ids=[eid],
+        episode_id=b_adapter.episode_id, content="Alice is short", memory_kind="FACT", entity_ids=[eid],
     )).data.memory_id
     # Both memories exist
     rows = b_adapter.conn.execute("SELECT COUNT(*) FROM memory_claims WHERE entity_ids LIKE ?", (f"%{str(eid)}%",)).fetchone()
@@ -202,7 +206,7 @@ def test_contradiction(b_adapter):
 def test_deletion(b_adapter):
     """Deletion marks lifecycle_state, does not physically remove."""
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="to delete", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="to delete", memory_kind="FACT",
     )).data.memory_id
     result = b_adapter.delete(DeleteRequest(target_type="memory", target_id=mid))
     assert result.is_success
@@ -213,7 +217,7 @@ def test_deletion(b_adapter):
 def test_restart_persistence(b_adapter):
     """Data survives restart: close and reopen adapter."""
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="persistent", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="persistent", memory_kind="FACT",
     )).data.memory_id
     b_adapter.shutdown(ShutdownRequest())
     # Reopen same DB
@@ -229,7 +233,7 @@ def test_graph_rebuild(b_adapter):
     """Rebuild indexes recreates graph from canonical data."""
     eid = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Alice")).data.entity_id
     b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="test", memory_kind="FACT", entity_ids=[eid],
+        episode_id=b_adapter.episode_id, content="test", memory_kind="FACT", entity_ids=[eid],
     ))
     # Rebuild
     result = b_adapter.rebuild_indexes(RebuildIndexesRequest())
@@ -245,7 +249,7 @@ def test_graph_recovery(b_adapter):
     """Corrupt graph → rebuild recovers it."""
     eid = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Alice")).data.entity_id
     b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="test", memory_kind="FACT", entity_ids=[eid],
+        episode_id=b_adapter.episode_id, content="test", memory_kind="FACT", entity_ids=[eid],
     ))
     # Simulate graph corruption by clearing graph tables
     b_adapter.conn.execute("DELETE FROM graph_edges")
@@ -263,7 +267,7 @@ def test_backup_restore(b_adapter):
     """Backup and restore preserves canonical + graph data."""
     eid = b_adapter.create_entity(CreateEntityRequest(entity_type="PERSON", name="Alice")).data.entity_id
     b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="backup test", memory_kind="FACT", entity_ids=[eid],
+        episode_id=b_adapter.episode_id, content="backup test", memory_kind="FACT", entity_ids=[eid],
     ))
     b_adapter.rebuild_indexes(RebuildIndexesRequest())
     # Backup
@@ -274,7 +278,7 @@ def test_backup_restore(b_adapter):
     assert os.path.exists(backup_path)
     # Add more data
     b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="after backup", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="after backup", memory_kind="FACT",
     ))
     # Restore
     b_adapter.restore(RestoreRequest(backup_id=bak_id))
@@ -302,7 +306,7 @@ def test_fallback_to_canonical_sqlite(b_adapter):
     b_adapter.conn.commit()
     # Should still retrieve via FTS
     mid = b_adapter.create_memory(CreateMemoryRequest(
-        episode_id=EpisodeId("ep1"), content="fallback test content", memory_kind="FACT",
+        episode_id=b_adapter.episode_id, content="fallback test content", memory_kind="FACT",
     )).data.memory_id
     result = b_adapter.retrieve(RetrieveRequest(query_text="fallback test", max_results=10))
     assert result.is_success
