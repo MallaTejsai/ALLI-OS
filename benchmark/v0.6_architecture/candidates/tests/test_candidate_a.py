@@ -3,6 +3,7 @@ import pytest
 from benchmark.v0_6_architecture.candidates.adapter_a import CandidateAAdapter
 from benchmark.v0_6_architecture.candidates.contract import InitializeRequest
 
+from benchmark.v0_6_architecture.candidates.contract import CreateMemoryRequest, CreateEpisodeRequest, CreateEntityRequest, UpdateMemoryRequest, SupersedeMemoryRequest, CreateRelationshipRequest, QueryRequest, RetrieveRequest, GetHistoryRequest, DeleteRequest, BackupRequest, RestoreRequest, RebuildIndexesRequest, HealthCheckRequest, ShutdownRequest, EpisodeId, EntityId, MemoryId, RelationshipId, BackupId
 from benchmark.v0_6_architecture.candidates.contract import InitializeRequest, CreateMemoryRequest, CreateEpisodeRequest, CreateEntityRequest, CreateRelationshipRequest, UpdateMemoryRequest, SupersedeMemoryRequest, DeleteRequest, BackupRequest, RestoreRequest, RebuildIndexesRequest, HealthCheckRequest, ShutdownRequest, QueryRequest, RetrieveRequest, GetHistoryRequest, EpisodeId, EntityId, MemoryId, RelationshipId, BackupId
 def test_initialize():
     adapter = CandidateAAdapter()
