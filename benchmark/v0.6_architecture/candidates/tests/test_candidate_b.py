@@ -20,6 +20,10 @@ def b_adapter():
     os.close(fd)
     adapter = CandidateBAdapter(db_path=path)
     adapter.initialize(InitializeRequest())
+    adapter.create_episode(CreateEpisodeRequest())  # ensure episode exists for foreign key
+    # Ensure clean DB state for each test
+    adapter.conn.execute('PRAGMA foreign_keys = ON')
+    adapter.conn.commit()
     yield adapter
     adapter.shutdown(ShutdownRequest())
     os.unlink(path)
