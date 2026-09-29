@@ -14,12 +14,12 @@ def test_create_memory():
     adapter = CandidateAAdapter()
     adapter.initialize(InitializeRequest())
     result = adapter.create_memory(type("Req", (), {
-        "episode_id": __import__("benchmark.v0_6_architecture.candidates.contract").EpisodeId.generate(),
+        "episode_id": EpisodeId.generate(),
         "content": "test", "memory_kind": "FACT", "entity_ids": []
     })())
-    adapter.shutdown(
-        __import__("benchmark.v0.6_architecture.candidates.contract").ShutdownRequest()
-    )
+    adapter.shutdown(ShutdownRequest())
+
+
 
 
 def test_transaction_rollback():
