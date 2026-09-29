@@ -25,6 +25,7 @@ from benchmark.v0_6_architecture.candidates.contract import (
     RelationshipId,
 )
 from benchmark.v0_6_architecture.candidates.adapter import CandidateAdapter, StubCandidateAdapter
+from benchmark.v0_6_architecture.candidates.adapter_b import CandidateBAdapter
 
 __all__ = [
     "CandidateContract",
@@ -36,4 +37,5 @@ __all__ = [
     "RelationshipId",
     "CandidateAdapter",
     "StubCandidateAdapter",
+    "CandidateBAdapter",
 ]
