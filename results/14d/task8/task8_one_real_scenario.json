@@ -1,0 +1,18 @@
+{
+  "scenario_id": "sc_43_00000",
+  "dataset_version": "ds_42_101",
+  "db_path": "/tmp/bench_b_fresh_14d.sqlite",
+  "observe_timestamp": 1790747752.5687408,
+  "raw_retrieve_result_type": "RetrieveResult",
+  "raw_retrieve_memories_count": 0,
+  "raw_retrieve_first_memory": null,
+  "raw_query_answer": "Retrieved 0 items via FTS for query: Recall memory mem_43_00000",
+  "observed_retrieval_items": 0,
+  "observed_first_item_memory_id": null,
+  "observed_first_score": null,
+  "observed_answer_text": "Retrieved 0 items via FTS for query: Recall memory mem_43_00000",
+  "observed_answer_class": "DIRECT",
+  "observed_evidence_refs": [],
+  "observed_evidence_refs_count": 0,
+  "note": "Score/rank: Candidate B genuinely produces none \u2014 observe_retrieve sets None, not fabricated."
+}
