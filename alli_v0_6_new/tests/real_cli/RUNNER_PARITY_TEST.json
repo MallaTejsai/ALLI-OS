@@ -1,0 +1,20 @@
+{
+  "test": "runner_parity_single_control",
+  "command_argv": [
+    "C:\\Users\\tejsa\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\\python.exe",
+    "alli_v0_6_new/src/cli/cli.py",
+    "remember",
+    "My name is Tejsai."
+  ],
+  "cwd": "E:\\AI - projects\\ALLI-OS",
+  "pythonpath": "E:\\AI - projects\\ALLI-OS\\alli_v0_6_new\\src",
+  "db_path": "E:\\AI - projects\\ALLI-OS\\alli_v0_6_new\\data\\regression_validation.sqlite",
+  "executable": "C:\\Users\\tejsa\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\\python.exe",
+  "python_version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "exit_code": 0,
+  "stdout_first_200": "FORMATION: M-1790879447292 | status: persisted | audit: v0.6-new-formation\nDB_COUNT: 2 | canonical storage path verified | DB: E:\\AI - projects\\ALLI-OS\\alli_v0_6_new\\data\\regression_validation.sqlite\n",
+  "stderr_first_500": "",
+  "db_before": 1,
+  "db_after": 2,
+  "timestamp": "2026-10-02T00:00:47"
+}

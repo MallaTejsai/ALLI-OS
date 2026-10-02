@@ -1,0 +1,5 @@
+{"cid": "C-001", "input": "My name is Tejsai.", "kind": "person/attribute", "before": 0, "after": 0, "exit": 1, "stdout_first_300": "", "ids": [], "ts": 1790875706.1261714}
+{"cid": "C-002", "input": "I am building a personal AI assistant called ALLI.", "kind": "project/fact", "before": 0, "after": 0, "exit": 1, "stdout_first_300": "", "ids": [], "ts": 1790875706.1819067}
+{"cid": "C-003", "input": "I use Python to build ALLI.", "kind": "relationship", "before": 0, "after": 0, "exit": 1, "stdout_first_300": "", "ids": [], "ts": 1790875706.2209816}
+{"cid": "C-004", "input": "ALLI uses Ollama.", "kind": "relationship", "before": 0, "after": 0, "exit": 1, "stdout_first_300": "", "ids": [], "ts": 1790875706.2714827}
+{"cid": "C-005", "input": "I am currently studying diploma CSE.", "kind": "attribute/state", "before": 0, "after": 0, "exit": 1, "stdout_first_300": "", "ids": [], "ts": 1790875706.3237066}

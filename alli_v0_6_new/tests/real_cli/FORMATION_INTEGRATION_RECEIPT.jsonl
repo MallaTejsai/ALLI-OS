@@ -1,0 +1,5 @@
+{"cid": "C-001", "input": "My name is Tejsai.", "exit": 1, "stdout": "", "db_before": 0, "db_after": 0, "entities": 0, "relationships": 0, "ts": 1790874155.3463168}
+{"cid": "C-002", "input": "I am building a personal AI assistant called ALLI.", "exit": 1, "stdout": "", "db_before": 0, "db_after": 0, "entities": 0, "relationships": 0, "ts": 1790874155.411467}
+{"cid": "C-003", "input": "I use Python to build ALLI.", "exit": 1, "stdout": "", "db_before": 0, "db_after": 0, "entities": 0, "relationships": 0, "ts": 1790874155.4508336}
+{"cid": "C-004", "input": "ALLI uses Ollama.", "exit": 1, "stdout": "", "db_before": 0, "db_after": 0, "entities": 0, "relationships": 0, "ts": 1790874155.4969244}
+{"cid": "C-005", "input": "I am currently studying diploma CSE.", "exit": 1, "stdout": "", "db_before": 0, "db_after": 0, "entities": 0, "relationships": 0, "ts": 1790874155.5478828}

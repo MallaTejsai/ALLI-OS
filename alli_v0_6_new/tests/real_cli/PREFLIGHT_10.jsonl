@@ -1,0 +1,10 @@
+{"cid": "C-001", "input": "My name is Tejsai.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.3613453}
+{"cid": "C-002", "input": "I am building a personal AI assistant called ALLI.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.4047883}
+{"cid": "C-003", "input": "I use Python to build ALLI.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.440767}
+{"cid": "C-004", "input": "ALLI uses Ollama.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.4915273}
+{"cid": "C-005", "input": "I am currently studying diploma CSE.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.5332499}
+{"cid": "C-006", "input": "I prefer local AI models.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.5769024}
+{"cid": "C-007", "input": "What is my favorite programming language?", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.6215181}
+{"cid": "C-008", "input": "Actually, I use Rust now for ALLI.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.6642666}
+{"cid": "C-009", "input": "What is Python?", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.7069652}
+{"cid": "C-010", "input": "I do not use Java for ALLI.", "exit": 2, "stdout_first": "", "db_after": 0, "ts": 1790877986.747559}
